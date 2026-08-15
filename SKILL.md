@@ -14,6 +14,10 @@ repeated `--task` per unit):
 
     node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...]
 
+For divergent alternatives, give every task a distinct `--perspective`. Candidate batches
+share one base and cannot declare dependencies. Their aggregate is evidence for a planner:
+it includes failed approaches but deliberately computes no winner, ranking, or score.
+
 - **Gate config** (`gate.json`): a JSON array of `{ "bin": "...", "args": ["..."] }`; pass/fail is by exit code only.
 - Codex writes only inside a git-isolated copy; the real tree is never touched.
 - Cursor runs two read-only (`--mode plan`) verification turns, for correctness and for

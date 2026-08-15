@@ -93,7 +93,7 @@ export async function run(opts) {
   const {
     task, target, gate, gateRetries, scratchRoot, runId,
     baseRef = 'HEAD', branch, branchName, campaignId, campaignBase,
-    round, unitId, campaignUnitKind, unitKind, merge,
+    round, unitId, campaignUnitKind, perspective, unitKind, merge,
     captureTestCount = false,
     executorModel = DEFAULT_EXECUTOR_MODEL,
     executorEffort = DEFAULT_EXECUTOR_EFFORT,
@@ -530,7 +530,9 @@ export async function run(opts) {
     intentVerifierPlan, intentVerifierEvidence, intentVerifierConsistency,
     gateFailure, tokens, outcome, gateRetries,
     timeouts: stageTimeouts, timeoutEvents,
-    ...(campaignId === undefined ? {} : { campaignId, round, unitId, campaignUnitKind }),
+    ...(campaignId === undefined
+      ? {}
+      : { campaignId, round, unitId, campaignUnitKind, perspective }),
     supervision: stallConfig ? {
       policy: stallConfig.policy,
       thresholdMs: stallConfig.thresholdMs,

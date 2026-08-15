@@ -88,12 +88,18 @@ worktree, gate, two read-only verifier passes, run facts, and `events.jsonl`.
 | `--token-budget` | 12,500,000 | positive campaign-wide token count |
 | `--unit-kind` | `candidate` | `candidate`, `node`, or `merge`; give once for every task or once per `--task` |
 | `--unit-id` | generated | stable unit ID; when used, give once per `--task` |
-| `--perspective` | `not-declared` in the event stream | planner perspective; when used, give once per `--task` |
+| `--perspective` | none | declares a Mode A candidate set; give one distinct label per `--task` |
 | `--depends-on` | none | `CHILD=PARENT`; repeat for edges and repeat the same child for fan-in |
 
 The budget counts input plus output tokens. Cached input and reasoning output are already
 subsets of those values and are not counted twice. Dispatch stops after completed run facts
 push the campaign over budget; units already in flight are allowed to finish.
+
+Mode A is a homogeneous candidate batch. Declare it with one `--perspective` per task (or by
+explicitly passing `unitKind: 'candidate'` through the programmatic API). Every candidate must
+have a distinct, non-empty perspective, all candidates use the same base, and dependency edges
+are rejected before execution. A bare batch without perspectives retains the original
+independent-task behavior for compatibility.
 
 Dependencies are a declared DAG topology: roots fan out up to the concurrency limit, while a
 dependent waits without occupying a slot. After a successful predecessor finishes, its staged
@@ -152,7 +158,11 @@ run-facts document; live event summaries use stderr.
 
 `batch` likewise writes exactly one JSON document to stdout: a `units` array containing each
 unit's identity, dispatch status, and run facts, plus a `rollup` with counts, aggregate usage,
-budget state, and outcome. Its single-writer `campaign-events.jsonl` lives at the
+budget state, and outcome. Mode A also adds an `alternatives` view. It states explicitly that
+no selection has been made and keeps each perspective beside its outcome and failure reason,
+both verdicts and their sources, evidence-consistency status, diff path, branch, test-count
+delta, and token cost. It computes no winner, ranking, or score. Its single-writer
+`campaign-events.jsonl` lives at the
 `campaignEventsPath` reported in that document, outside every unit worktree. The campaign
 stream contains campaign and round boundaries plus unit lifecycle records, including explicit
 `waiting`, `released`, and `skipped` records for dependency edges; detailed stage
@@ -163,15 +173,16 @@ because they describe no individual unit; unit lifecycle and per-unit records ca
 The campaign stream also records the shared-base decision, merge-context preparation, and the
 planner data path. Each candidate gets `planner/candidate_generated` with its perspective,
 each dispatched unit gets one attributed `planner/review_received` containing both review
-seats (or an explicit missing list), and `planner/synthesis` records the selected decision and
-reasoning before the round ends. The programmatic `runCampaign` API can accept a
-`plannerSynthesis` object or callback; without one it explicitly returns the attributed review
-set instead of inventing a comparison.
+seats (or an explicit missing list), and `planner/synthesis` records caller-supplied reasoning
+before the round ends. The programmatic `runCampaign` API can accept a `plannerSynthesis`
+object or callback; without one it explicitly returns the attributed review set instead of
+inventing a comparison or selection.
 
-A batch exits 0 only when every dispatched unit has a successful existing run outcome and the
-budget was not exceeded. Any failed unit takes precedence as `campaign-failed` (exit 6);
-otherwise a budget overage is `budget-exhausted` (exit 7). Failure of one unit never cancels
-its peers.
+An independent or DAG batch exits 0 only when every dispatched unit has a successful existing
+run outcome and the budget was not exceeded. In Mode A, a failed candidate remains evidence and
+does not make the candidate set non-zero while another usable alternative completed; if every
+candidate fails, the rollup is `campaign-failed` (exit 6). A budget overage remains
+`budget-exhausted` (exit 7). Failure of one unit never cancels its peers.
 
 `status` is a separate, human-readable view of a run or campaign in progress. Pass either the
 isolated `w` directory, its parent run directory, or a campaign directory containing

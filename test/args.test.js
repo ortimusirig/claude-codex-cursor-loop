@@ -180,3 +180,17 @@ test('batch rejects unsafe fan-out, bad kinds, and mismatched per-task kinds', (
     '--perspective', 'only-one',
   ]), /perspective.*once per/i);
 });
+
+test('naming the default unit kind does not turn a batch into a candidate set', () => {
+  // `candidate` is the documented default kind, so passing it explicitly must be a no-op.
+  // Keying Mode A off --unit-kind made this batch a candidate set, which validateCandidateSet
+  // then rejected for missing perspectives — breaking a previously valid invocation.
+  const base = ['batch', '--task', 'a.md', '--task', 'b.md', '--target', '.', '--gate', 'g.json'];
+  assert.equal(parseArgs(base).candidateSet, false, 'positive control: a plain batch is not a candidate set');
+  assert.equal(parseArgs([...base, '--unit-kind', 'candidate']).candidateSet, false,
+    'explicitly naming the default kind must not change behaviour');
+  assert.equal(
+    parseArgs([...base, '--perspective', 'minimal-change', '--perspective', 'refactor-first']).candidateSet,
+    true,
+    'positive control: perspectives DO make a candidate set, so this is not passing by always returning false');
+});

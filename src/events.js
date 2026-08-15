@@ -278,6 +278,12 @@ function detailFor(event) {
         ? `preparing shared campaign base source=${oneLine(event.source)}`
         : `campaign base ${oneLine(event.verdict)} repository=${oneLine(event.repository)}`;
     }
+    if (event.scope === 'candidate-test-baseline') {
+      return event.type === 'start'
+        ? `measuring candidate test baseline commit=${oneLine(event.baseRef)}`
+        : `candidate test baseline ${oneLine(event.verdict)}`
+          + ` gate=${oneLine(event.gateTestCount)} files=${oneLine(event.testFileCount)}`;
+    }
     if (event.scope === 'campaign-result') {
       return event.type === 'start'
         ? `recording campaign result branch=${oneLine(event.branch)}`
@@ -325,7 +331,7 @@ function detailFor(event) {
   }
   if (event.stage === 'campaign') {
     return event.type === 'start'
-      ? `started units=${oneLine(event.unitCount)}`
+      ? `started units=${oneLine(event.unitCount)} shape=${oneLine(event.campaignShape)}`
       : `finished outcome=${oneLine(event.outcome)}`;
   }
   if (event.stage === 'round') {
@@ -337,6 +343,7 @@ function detailFor(event) {
     }
     if (event.type === 'review_received') {
       return `reviews unit=${oneLine(event.unitId)} complete=${oneLine(event.complete)}`
+        + (event.perspective ? ` perspective=${oneLine(event.perspective)}` : '')
         + ` correctness=${oneLine(event.correctness?.verdict)}`
         + ` intent=${oneLine(event.intent?.verdict)}`;
     }

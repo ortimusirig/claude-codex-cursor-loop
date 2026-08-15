@@ -39,6 +39,7 @@ export function buildRunFacts({
   round,
   unitId,
   campaignUnitKind,
+  perspective,
   unitKind,
   merge,
 }) {
@@ -83,6 +84,7 @@ export function buildRunFacts({
     facts.round = round;
     facts.unitId = unitId;
     facts.campaignUnitKind = campaignUnitKind;
+    if (perspective !== undefined) facts.perspective = perspective;
   }
   if (unitKind !== undefined) facts.unitKind = unitKind;
   if (merge !== undefined) facts.merge = merge;
@@ -151,6 +153,7 @@ export function buildReportMarkdown(facts, {
     `- **Base ref:** ${facts.baseRef}`,
     `- **Base commit:** ${facts.baseCommit}`,
     `- **Branch:** ${facts.branch}`,
+    ...(facts.perspective === undefined ? [] : [`- **Perspective:** ${facts.perspective}`]),
     `- **Iterations:** ${facts.iterations.length}`,
     ...(facts.unitKind === 'merge'
       ? [

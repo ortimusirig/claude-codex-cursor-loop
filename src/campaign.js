@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { exitCodeFor } from './exit.js';
 import { identifyEvent, reportEvent, UNIT_KINDS } from './events.js';
@@ -9,6 +9,7 @@ import {
   withDetachedWorktree,
 } from './isolation.js';
 import { deriveMergeContext, withObservedTestCounts } from './merge.js';
+import { countTestFiles } from './merge-test-count.js';
 import { run as realRun } from './run.js';
 import { resolveStageTimeouts } from './timeouts.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
@@ -110,10 +111,11 @@ function normalizeUnits(tasks, unitKind, campaignId) {
     const task = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
       ? raw.task
       : raw;
-    const kind = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    const isObject = raw !== null && typeof raw === 'object' && !Array.isArray(raw);
+    const kind = isObject
       ? (raw.unitKind ?? unitKind)
       : unitKind;
-    const unitId = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    const unitId = isObject
       ? (raw.unitId ?? raw.runId ?? `${campaignId}-u${String(index + 1).padStart(3, '0')}`)
       : `${campaignId}-u${String(index + 1).padStart(3, '0')}`;
     if (typeof task !== 'string' || task === '') {
@@ -125,25 +127,97 @@ function normalizeUnits(tasks, unitKind, campaignId) {
     }
     if (seen.has(unitId)) throw new TypeError(`duplicate campaign unitId: ${unitId}`);
     seen.add(unitId);
-    const baseRef = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    const baseRef = isObject
       ? raw.baseRef
       : undefined;
-    const branch = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    const branch = isObject
       ? (raw.branch ?? raw.branchName)
       : undefined;
     const parents = declaredParents(raw, unitId);
-    const perspective = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    const perspective = isObject
       ? raw.perspective
       : undefined;
     if (perspective !== undefined && (typeof perspective !== 'string' || perspective.trim() === '')) {
       throw new TypeError(`campaign unit "${unitId}" perspective must be a non-empty string`);
     }
     return {
-      index, task, unitKind: kind, unitId, baseRef, branch, parents, perspective,
+      index, task, unitKind: kind, unitId, baseRef, branch, parents,
+      perspective: perspective?.trim(),
+      explicitUnitKind: isObject && Object.hasOwn(raw, 'unitKind'),
     };
   });
-  validateDependencyGraph(units);
   return units;
+}
+
+function validateCandidateSet(units) {
+  if (!units.every((unit) => unit.unitKind === 'candidate')) {
+    throw new Error('a candidate set may contain only candidate units');
+  }
+  for (const unit of units) {
+    if (unit.perspective === undefined) {
+      throw new Error(`candidate "${unit.unitId}" must declare a perspective`);
+    }
+    if (unit.parents.length > 0) {
+      throw new Error(
+        `candidate "${unit.unitId}" cannot declare dependencies; candidates are alternatives`,
+      );
+    }
+  }
+  const perspectiveOwners = new Map();
+  for (const unit of units) {
+    const key = unit.perspective.toLocaleLowerCase('en-US');
+    const previous = perspectiveOwners.get(key);
+    if (previous !== undefined) {
+      throw new Error(
+        `duplicate candidate perspective "${unit.perspective}" on "${previous}" and "${unit.unitId}"`,
+      );
+    }
+    perspectiveOwners.set(key, unit.unitId);
+  }
+  const baseRefs = new Set(units.map((unit) => unit.baseRef ?? 'HEAD'));
+  if (baseRefs.size !== 1) {
+    throw new Error('all candidates must declare the same base ref');
+  }
+}
+
+function candidateFailureReason(entry) {
+  const facts = entry.facts;
+  if (entry.error?.message) return entry.error.message;
+  if (entry.reason) return entry.reason;
+  if (!facts || exitCodeFor(facts.outcome) === 0) return null;
+  const timeout = facts.timeoutEvents?.at(-1);
+  if (facts.outcome === 'timed-out' && timeout) {
+    return `${timeout.stage ?? 'stage'} timed out after ${timeout.timeoutMs ?? 'unknown'} ms`;
+  }
+  if (facts.outcome === 'timed-out') return 'candidate execution timed out';
+  if (facts.gateFailure) {
+    const command = [facts.gateFailure.bin, ...(facts.gateFailure.args ?? [])]
+      .filter(Boolean).join(' ');
+    return `${command || 'gate command'} ${facts.gateFailure.timedOut ? 'timed out' : `exited with code ${facts.gateFailure.code}`}`;
+  }
+  if (facts.outcome === 'verifier-failed') {
+    return 'one or both verifier passes did not produce usable verdict evidence';
+  }
+  return facts.outcome ?? 'internal-error';
+}
+
+function candidateVerdict(facts, pass) {
+  const intent = pass === 'intent';
+  const consistency = intent
+    ? facts?.intentVerifierConsistency?.status ?? null
+    : facts?.verifierConsistency?.status ?? null;
+  return {
+    verdict: intent ? facts?.intentVerdict ?? null : facts?.verdict ?? null,
+    source: intent ? facts?.intentVerdictSource ?? null : facts?.verdictSource ?? null,
+    consistency,
+    selfConsistent: consistency === null ? null : consistency === 'consistent',
+  };
+}
+
+function observedCandidateTestCount(facts) {
+  if (Number.isSafeInteger(facts?.testCount) && facts.testCount >= 0) return facts.testCount;
+  const count = facts?.iterations?.at(-1)?.gate?.testCount;
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
 }
 
 function plannerReview(entry) {
@@ -170,6 +244,7 @@ function plannerReview(entry) {
   return {
     unitId: entry.unitId,
     unitKind: entry.unitKind,
+    ...(entry.perspective === undefined ? {} : { perspective: entry.perspective }),
     outcome: facts?.outcome ?? (entry.status === 'failed' ? 'internal-error' : entry.status),
     gateStatus: facts?.gateStatus ?? null,
     expected: reviewExpected,
@@ -201,7 +276,8 @@ function normalizeSynthesis(value, outcome) {
 function reporterForUnit(factory, unit, identity) {
   if (typeof factory !== 'function') return undefined;
   let sink;
-  try { sink = factory({ ...unit, ...identity }); } catch { return undefined; }
+  const { explicitUnitKind: _explicitUnitKind, ...publicUnit } = unit;
+  try { sink = factory({ ...publicUnit, ...identity }); } catch { return undefined; }
   if (typeof sink !== 'function') return undefined;
   return (event) => {
     try {
@@ -213,22 +289,27 @@ function reporterForUnit(factory, unit, identity) {
   };
 }
 
-export async function runCampaign({
-  campaignId,
-  round = 1,
-  tasks,
-  target,
-  gate,
-  concurrency = DEFAULT_CONCURRENCY,
-  tokenBudget = DEFAULT_TOKEN_BUDGET,
-  unitKind = 'candidate',
-  scratchRoot,
-  runOptions = {},
-  reporter,
-  unitReporterFactory,
-  plannerSynthesis,
-  runUnit = realRun,
-}) {
+export async function runCampaign(options) {
+  if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('campaign options must be an object');
+  }
+  const {
+    campaignId,
+    round = 1,
+    tasks,
+    target,
+    gate,
+    concurrency = DEFAULT_CONCURRENCY,
+    tokenBudget = DEFAULT_TOKEN_BUDGET,
+    unitKind = 'candidate',
+    scratchRoot,
+    runOptions = {},
+    reporter,
+    unitReporterFactory,
+    plannerSynthesis,
+    runUnit = realRun,
+    candidateSet: candidateSetDeclaration,
+  } = options;
   if (typeof campaignId !== 'string' || campaignId === '') {
     throw new TypeError('campaignId must be a non-empty string');
   }
@@ -239,6 +320,14 @@ export async function runCampaign({
   if (typeof runUnit !== 'function') throw new TypeError('runUnit must be a function');
 
   const units = normalizeUnits(tasks, unitKind, campaignId);
+  const allCandidates = units.every((unit) => unit.unitKind === 'candidate');
+  const candidateSet = candidateSetDeclaration === true || (allCandidates && (
+    Object.hasOwn(options, 'unitKind')
+    || units.every((unit) => unit.explicitUnitKind)
+    || units.some((unit) => unit.perspective !== undefined)
+  ));
+  if (candidateSet) validateCandidateSet(units);
+  validateDependencyGraph(units);
   if (plannerSynthesis !== undefined
     && typeof plannerSynthesis !== 'function'
     && (plannerSynthesis === null || typeof plannerSynthesis !== 'object'
@@ -254,8 +343,20 @@ export async function runCampaign({
     unitCount: units.length,
     concurrency,
     tokenBudget,
+    ...(candidateSet ? {
+      campaignShape: 'candidate-set',
+      alternatives: true,
+      candidates: units.map((unit) => ({
+        unitId: unit.unitId,
+        perspective: unit.perspective,
+      })),
+    } : { campaignShape: 'task-set', alternatives: false }),
   });
-  lifecycle(campaignId, 'round', 'start', { unitCount: units.length });
+  lifecycle(campaignId, 'round', 'start', {
+    unitCount: units.length,
+    campaignShape: candidateSet ? 'candidate-set' : 'task-set',
+    alternatives: candidateSet,
+  });
   if (observed) {
     for (const unit of units.filter((candidate) => candidate.unitKind === 'candidate')) {
       lifecycle(unit.unitId, 'planner', 'candidate_generated', {
@@ -304,7 +405,7 @@ export async function runCampaign({
     }
   }
   const hasMerge = units.some((unit) => unit.parents.length > 1);
-  const gateCommands = runUnit === realRun && hasMerge
+  const gateCommands = runUnit === realRun && (hasMerge || candidateSet)
     ? (Array.isArray(gate) ? gate : JSON.parse(readFileSync(gate, 'utf8')))
     : null;
   const baselineTestCounts = new Map();
@@ -333,13 +434,65 @@ export async function runCampaign({
     baselineTestCounts.set(commit, measurement);
     return measurement;
   };
-  const entries = units.map(({ index, unitId, unitKind: kind, dependsOn, parents }) => ({
+  const candidateBaselines = new Map();
+  const measureCandidateBaseline = (commit, unit, captureGateCount) => {
+    if (candidateBaselines.has(commit)) return candidateBaselines.get(commit);
+    lifecycle(campaignId, 'isolate', 'start', {
+      scope: 'candidate-test-baseline',
+      baseRef: commit,
+    });
+    const measurement = withDetachedWorktree({
+      repository: campaignBase.repository,
+      commit,
+      dir: join(scratchRoot, campaignId, `.candidate-test-count-${unit.index}`),
+      action: async (cwd) => {
+        const files = countTestFiles(cwd);
+        if (!captureGateCount) return { gate: null, files };
+        const gateRunner = runOptions.adapters?.runGate ?? realGate;
+        const result = await gateRunner({
+          commands: gateCommands,
+          cwd,
+          timeoutMs: resolveStageTimeouts().gate,
+          runId: `${unit.unitId}-candidate-baseline-count`,
+          attempt: 0,
+          captureTestCount: true,
+        });
+        return {
+          gate: Number.isSafeInteger(result?.testCount) ? result.testCount : null,
+          files,
+        };
+      },
+    }).then((counts) => {
+      lifecycle(campaignId, 'isolate', 'finish', {
+        scope: 'candidate-test-baseline',
+        baseRef: commit,
+        verdict: 'measured',
+        gateTestCount: counts.gate,
+        testFileCount: counts.files,
+      });
+      return counts;
+    }).catch((error) => {
+      lifecycle(campaignId, 'isolate', 'finish', {
+        scope: 'candidate-test-baseline',
+        baseRef: commit,
+        verdict: 'unavailable',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return { gate: null, files: null };
+    });
+    candidateBaselines.set(commit, measurement);
+    return measurement;
+  };
+  const entries = units.map(({
+    index, unitId, unitKind: kind, dependsOn, parents, perspective,
+  }) => ({
     index,
     unitId,
     unitKind: kind,
     round,
     status: parents.length === 0 ? 'pending' : 'waiting',
     facts: null,
+    ...(perspective === undefined ? {} : { perspective }),
     ...(parents.length === 0 ? {} : { dependsOn }),
   }));
   let aggregateUsage = EMPTY_USAGE;
@@ -483,7 +636,11 @@ export async function runCampaign({
           unitId: unit.unitId,
           unitKind: unit.unitKind,
         };
-        lifecycle(unit.unitId, 'unit', 'start', { index: unit.index }, identity);
+        lifecycle(unit.unitId, 'unit', 'start', {
+          index: unit.index,
+          ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
+          ...(candidateSet ? { alternative: true } : {}),
+        }, identity);
         const unitReporter = reporterForUnit(unitReporterFactory, unit, identity);
         const topology = unit.parents.length === 0
           ? (unit.baseRef === undefined ? {} : { baseRef: unit.baseRef })
@@ -551,17 +708,23 @@ export async function runCampaign({
             round,
             unitId: unit.unitId,
             campaignUnitKind: unit.unitKind,
+            ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
             scratchRoot,
             runId: unit.unitId,
             ...(campaignBase ? { campaignBase } : {}),
             ...runTopology,
-            ...(runUnit === realRun && hasMerge ? { captureTestCount: true } : {}),
+            ...(runUnit === realRun && (hasMerge || candidateSet)
+              ? { captureTestCount: true }
+              : {}),
             ...(unit.branch === undefined ? {} : { branch: unit.branch }),
             ...(unitReporter ? { reporter: unitReporter } : {}),
           });
         }).then(async (facts) => {
-          entry.facts = facts;
-          aggregateUsage = addUsage(aggregateUsage, facts?.tokens?.total);
+          entry.facts = unit.perspective === undefined
+            || facts === null || typeof facts !== 'object' || Array.isArray(facts)
+            ? facts
+            : { ...facts, perspective: unit.perspective };
+          aggregateUsage = addUsage(aggregateUsage, entry.facts?.tokens?.total);
           consumedTokens = countUsageTokens(aggregateUsage);
           if (runUnit === realRun
             && children[unitIndex].length > 0
@@ -598,6 +761,8 @@ export async function runCampaign({
             index: unit.index,
             outcome: facts?.outcome ?? 'unknown',
             consumedTokens,
+            ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
+            ...(candidateSet ? { alternative: true } : {}),
           }, identity);
         }).catch((error) => {
           entry.status = 'failed';
@@ -620,6 +785,8 @@ export async function runCampaign({
               missing: review.missing,
               correctness: review.correctness,
               intent: review.intent,
+              ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
+              ...(candidateSet ? { alternative: true } : {}),
             }, identity);
           }
           inFlight--;
@@ -635,6 +802,34 @@ export async function runCampaign({
 
     dispatch();
   });
+  const candidateTestCounts = new Map();
+  if (candidateSet && runUnit === realRun) {
+    const captureGateCount = entries.some((entry) => (
+      observedCandidateTestCount(entry.facts) !== null
+    ));
+    for (const unit of units) {
+      const entry = entries[unit.index];
+      const commit = entry.facts?.baseCommit;
+      if (typeof commit !== 'string' || commit === '') continue;
+      const baseline = await measureCandidateBaseline(commit, unit, captureGateCount);
+      const observed = observedCandidateTestCount(entry.facts);
+      let candidateFiles = null;
+      if (observed === null && typeof entry.facts?.dir === 'string') {
+        try { candidateFiles = countTestFiles(entry.facts.dir); } catch { /* unavailable */ }
+      }
+      const source = observed !== null && baseline.gate !== null ? 'gate-output' : 'test-files';
+      const before = source === 'gate-output' ? baseline.gate : baseline.files;
+      const after = source === 'gate-output' ? observed : candidateFiles;
+      candidateTestCounts.set(unit.index, {
+        baseline: Number.isSafeInteger(before) ? before : null,
+        candidate: Number.isSafeInteger(after) ? after : null,
+        delta: Number.isSafeInteger(before) && Number.isSafeInteger(after)
+          ? after - before
+          : null,
+        source,
+      });
+    }
+  }
   const dispatchedEntries = entries.filter((entry) => (
     entry.status === 'completed' || entry.status === 'failed'
   ));
@@ -646,9 +841,15 @@ export async function runCampaign({
   ));
   const skippedEntries = entries.filter((entry) => entry.status === 'skipped');
   const undispatchedEntries = entries.filter((entry) => entry.status === 'not-dispatched');
-  const outcome = failedEntries.length > 0 || skippedEntries.length > 0
-    ? 'campaign-failed'
-    : budgetExceeded ? 'budget-exhausted' : 'review-ready';
+  const everyCandidateFailed = candidateSet
+    && failedEntries.length === entries.length;
+  const outcome = candidateSet
+    ? (everyCandidateFailed
+        ? 'campaign-failed'
+        : budgetExceeded ? 'budget-exhausted' : 'review-ready')
+    : (failedEntries.length > 0 || skippedEntries.length > 0
+        ? 'campaign-failed'
+        : budgetExceeded ? 'budget-exhausted' : 'review-ready');
   const counts = {
     planned: entries.length,
     dispatched: dispatchedEntries.length,
@@ -667,6 +868,64 @@ export async function runCampaign({
     consumedTokens,
     budgetExceeded,
   };
+  const alternatives = candidateSet ? {
+    status: 'awaiting-planner-decision',
+    statement: 'These candidates are alternatives for one goal. No selection has been made; a planner must choose or synthesize from the evidence.',
+    candidates: entries.map((entry) => {
+      const facts = entry.facts;
+      const correctness = candidateVerdict(facts, 'correctness');
+      const intent = candidateVerdict(facts, 'intent');
+      const consistencyValues = [correctness.selfConsistent, intent.selfConsistent];
+      const evidenceSelfConsistent = consistencyValues.includes(false)
+        ? false
+        : consistencyValues.every((value) => value === true) ? true : null;
+      let testCount = candidateTestCounts.get(entry.index) ?? null;
+      if (testCount === null && facts?.testCounts && typeof facts.testCounts === 'object') {
+        testCount = {
+          baseline: facts.testCounts.baseline ?? null,
+          candidate: facts.testCounts.candidate ?? facts.testCounts.actual ?? null,
+          delta: facts.testCounts.delta ?? null,
+          source: facts.testCounts.source ?? null,
+        };
+      }
+      if (testCount === null && Number.isSafeInteger(facts?.testCountDelta)) {
+        testCount = {
+          baseline: null,
+          candidate: observedCandidateTestCount(facts),
+          delta: facts.testCountDelta,
+          source: facts.testCountSource ?? null,
+        };
+      }
+      testCount ??= { baseline: null, candidate: null, delta: null, source: null };
+      const candidateOutcome = facts?.outcome
+        ?? (entry.status === 'failed' ? 'internal-error' : entry.status);
+      const successful = entry.status === 'completed' && exitCodeFor(candidateOutcome) === 0;
+      const tokens = addUsage(EMPTY_USAGE, facts?.tokens?.total);
+      const proposedDiffPath = typeof facts?.dir === 'string'
+        ? join(facts.dir, 'CHANGES.diff')
+        : null;
+      return {
+        unitId: entry.unitId,
+        perspective: entry.perspective,
+        status: successful ? 'succeeded' : entry.status === 'not-dispatched'
+          ? 'not-dispatched' : 'failed',
+        outcome: candidateOutcome,
+        successful,
+        reason: successful ? null : candidateFailureReason(entry),
+        verdicts: { correctness, intent },
+        evidenceSelfConsistent,
+        diffPath: proposedDiffPath !== null && existsSync(proposedDiffPath)
+          ? proposedDiffPath
+          : null,
+        branch: facts?.branch ?? null,
+        baseCommit: facts?.baseCommit ?? null,
+        testCount,
+        testCountDelta: testCount.delta,
+        tokens,
+        tokenCost: countUsageTokens(tokens),
+      };
+    }),
+  } : null;
 
   let synthesis = null;
   if (observed || plannerSynthesis !== undefined) {
@@ -730,6 +989,7 @@ export async function runCampaign({
     limits: { concurrency, tokenBudget },
     units: entries,
     rollup,
+    ...(alternatives === null ? {} : { alternatives }),
     ...(plannerSynthesis === undefined ? {} : { planner: { synthesis } }),
   };
 }

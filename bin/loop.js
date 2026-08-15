@@ -93,7 +93,12 @@ async function main() {
     });
     const aggregate = await runCampaign({
       campaignId,
-      tasks: opts.tasks,
+      tasks: opts.candidateSet ? opts.tasks : opts.tasks.map((unit) => {
+        if (unit.unitKind !== 'candidate') return unit;
+        const { unitKind: _legacyDefault, ...legacyUnit } = unit;
+        return legacyUnit;
+      }),
+      ...(opts.candidateSet ? { candidateSet: true } : {}),
       target: opts.target,
       gate: opts.gate,
       concurrency: opts.concurrency,

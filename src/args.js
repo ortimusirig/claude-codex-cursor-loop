@@ -150,6 +150,13 @@ export function parseArgs(argv) {
   if (perspectives?.some((perspective) => perspective.trim() === '')) {
     throw new Error('--perspective values must be non-empty');
   }
+  if (perspectives !== undefined) {
+    const normalized = perspectives.map((perspective) => perspective.trim().toLocaleLowerCase('en-US'));
+    const duplicateIndex = normalized.findIndex((value, index) => normalized.indexOf(value) !== index);
+    if (duplicateIndex !== -1) {
+      throw new Error(`duplicate --perspective: ${perspectives[duplicateIndex]}`);
+    }
+  }
   const rawEdges = values['depends-on'] ?? [];
   if (rawEdges.length > 0 && unitIds === undefined) {
     throw new Error('--depends-on requires one --unit-id per --task');
@@ -187,6 +194,15 @@ export function parseArgs(argv) {
   const parsed = {
     command,
     tasks: campaignTasks,
+    // Mode A is keyed off --perspective ALONE. `candidate` is the documented default
+    // unit kind, so naming it explicitly must not change behaviour: a batch of
+    // independent tasks passing `--unit-kind candidate` without perspectives stayed a
+    // plain batch before and must stay one now. Including --unit-kind in this condition
+    // is redundant when perspectives are present and breaks compatibility when they are
+    // absent, because validateCandidateSet then rejects the batch for missing
+    // perspectives before any executor runs.
+    candidateSet: perspectives !== undefined
+      && rawKinds.every((kind) => kind === 'candidate'),
     target: values.target,
     gate: values.gate,
     gateRetries: clampInt(values['gate-retries'], 2, 0, 3),
