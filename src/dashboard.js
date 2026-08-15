@@ -154,9 +154,14 @@ export function buildDashboardSnapshot({ runDirectory, scratchRoot } = {}) {
         runs: [],
       };
     }
+    // Newest first. Run directory names are ISO-8601 timestamps, so a reverse
+    // lexicographic sort is a reverse chronological sort. Oldest-first buries the run
+    // you actually opened the page for beneath every historical one — a scratch root
+    // that has accumulated a dozen old runs shows a dozen empty cards before the
+    // current one.
     entries = readdirSync(sourcePath, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => b.name.localeCompare(a.name));
   } catch (error) {
     if (error?.code === 'ENOENT') {
       return {

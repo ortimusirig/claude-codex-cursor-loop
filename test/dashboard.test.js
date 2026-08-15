@@ -198,9 +198,34 @@ test('scratch-root mode represents several runs side by side', async () => {
     const html = await page(dashboard);
     assert.match(html, /data-run-id="campaign-run-a"/);
     assert.match(html, /data-run-id="campaign-run-b"/);
-    assert.match(html, /<main id="runs">[\s\S]*campaign-run-a[\s\S]*campaign-run-b/);
+    // Newest first: run directories are ISO timestamps, so reverse lexicographic is
+    // reverse chronological. 'campaign-run-b' sorts after 'campaign-run-a', so it leads.
+    assert.match(html, /<main id="runs">[\s\S]*campaign-run-b[\s\S]*campaign-run-a/);
     assert.match(html, /main\{display:flex/,
       'campaign cards must use a horizontal side-by-side layout');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('scratch-root lists the newest run first', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-order-'));
+  // Real run-directory names: ISO-8601 timestamps. Deliberately created oldest-first so
+  // a listing that simply preserves readdir/ascending order fails this test.
+  const oldest = '2026-08-05T04-19-31-854Z-aaaaaaaa';
+  const middle = '2026-08-15T02-12-37-942Z-bbbbbbbb';
+  const newest = '2026-08-15T08-10-09-664Z-cccccccc';
+  for (const id of [oldest, middle, newest]) {
+    makeRun(root, id, [event(id, 'executor', 'start')]);
+  }
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
+    const html = await page(dashboard);
+    const order = [...html.matchAll(/data-run-id="([^"]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(order, [newest, middle, oldest],
+      'the run you opened the page for must not be buried beneath historical runs');
   } finally {
     await dashboard?.close();
     rmSync(root, { recursive: true, force: true });
