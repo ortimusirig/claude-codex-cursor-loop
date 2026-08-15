@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnCapture } from '../src/spawn.js';
-import { readRunStatus } from '../src/status.js';
+import { readRunStatus, readStatus } from '../src/status.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 
@@ -108,5 +108,65 @@ test('status filters a mixed event file to the run named by its directory and wa
     assert.doesNotMatch(result.stdout, /other\/[abc][.]js|input 1011|output 307/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('status reads a live two-unit campaign, ignores its partial tail, and distinguishes units', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ccc-status-campaign-'));
+  const campaignId = 'status-campaign';
+  const identity = (unitId, unitKind) => ({ campaignId, round: 1, unitId, unitKind });
+  const event = (runId, stage, type, fields = {}, unitId = null, unitKind = null) => ({
+    ts: '2026-08-15T00:00:00.000Z',
+    runId,
+    ...identity(unitId, unitKind),
+    stage,
+    type,
+    ...fields,
+  });
+  const events = [
+    event(campaignId, 'campaign', 'start'),
+    event(campaignId, 'round', 'start'),
+    event('candidate-a', 'planner', 'candidate_generated', { perspective: 'minimal-change' },
+      'candidate-a', 'candidate'),
+    event('candidate-a', 'unit', 'start', {}, 'candidate-a', 'candidate'),
+    event('candidate-b', 'unit', 'start', {}, 'candidate-b', 'candidate'),
+    event('candidate-a', 'unit', 'finish', { outcome: 'review-ready' },
+      'candidate-a', 'candidate'),
+    event('candidate-a', 'planner', 'review_received', { complete: true },
+      'candidate-a', 'candidate'),
+    event('candidate-b', 'unit', 'finish', { outcome: 'no-op' },
+      'candidate-b', 'candidate'),
+    event('candidate-b', 'planner', 'review_received', { complete: true },
+      'candidate-b', 'candidate'),
+    event(campaignId, 'planner', 'synthesis', {
+      decision: 'combine-a-and-b', reasoning: 'A supplies structure; B proves the no-op edge.',
+    }),
+    event(campaignId, 'round', 'finish', { outcome: 'review-ready' }),
+    event(campaignId, 'campaign', 'finish', { outcome: 'review-ready' }),
+  ];
+  writeFileSync(join(directory, 'campaign-events.jsonl'),
+    `${events.map(JSON.stringify).join('\n')}\n{"ts":"partial`);
+  writeFileSync(join(directory, 'operator-note.txt'), 'unchanged\n');
+  const before = snapshot(directory);
+  try {
+    const status = readStatus(directory, { now: Date.parse('2026-08-15T00:00:05.000Z') });
+    assert.equal(status.mode, 'campaign');
+    assert.equal(status.campaignId, campaignId);
+    assert.deepEqual(status.units.map((unit) => unit.unitId), ['candidate-a', 'candidate-b']);
+    assert.deepEqual(status.units.map((unit) => unit.outcome), ['review-ready', 'no-op']);
+    assert.equal(status.units[0].perspective, 'minimal-change');
+    assert.ok(status.units.every((unit) => unit.reviewsComplete));
+
+    const result = await spawnCapture(process.execPath, [cli, 'status', directory]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^Campaign: status-campaign/m);
+    assert.match(result.stdout, /Units \(2\):/);
+    assert.match(result.stdout, /candidate-a \[candidate\]: finished; outcome review-ready/);
+    assert.match(result.stdout, /candidate-b \[candidate\]: finished; outcome no-op/);
+    assert.match(result.stdout, /Synthesis: combine-a-and-b/);
+    assert.deepEqual(snapshot(directory), before,
+      'campaign status must remain read-only even with a partial final record');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

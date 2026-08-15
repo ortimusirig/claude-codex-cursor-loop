@@ -12,6 +12,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { runCampaign } from '../src/campaign.js';
+import { parsePartialEventStream } from '../src/event-stream.js';
 import { formatEventSummary, reportEvent } from '../src/events.js';
 import { exitCodeFor } from '../src/exit.js';
 import { spawnCapture } from '../src/spawn.js';
@@ -543,12 +544,115 @@ test('campaign and concurrent unit events carry complete, correctly scoped ident
     assert.equal(event.unitKind, lifecycleByUnit.get(event.unitId),
       `wrong unit attribution for ${JSON.stringify(event)}`);
   }
+  const attributedCampaignEvents = campaignEvents.filter((event) => event.unitId !== null);
+  assert.ok(attributedCampaignEvents.some((event) => (
+    event.stage === 'planner' && event.type === 'review_received' && event.unitId === 'candidate-1'
+  )), 'candidate 1 must feed an attributed review record to the planner');
+  assert.ok(attributedCampaignEvents.some((event) => (
+    event.stage === 'planner' && event.type === 'review_received' && event.unitId === 'merge-1'
+  )), 'merge 1 must feed an attributed review record to the planner');
+  for (const event of attributedCampaignEvents) {
+    assert.equal(event.unitKind, lifecycleByUnit.get(event.unitId),
+      `campaign stream cross-attributed ${event.stage}/${event.type}`);
+  }
   for (const [unitId, events] of unitEvents) {
     assert.ok(events.length > 0, `positive control: ${unitId} emitted no events`);
     assert.ok(events.every((event) => event.unitId === unitId),
       `${unitId}'s stream contains another unit's event`);
     assert.ok(events.every((event) => event.unitKind === lifecycleByUnit.get(unitId)));
   }
+});
+
+test('planner events retain candidate perspectives, both reviews, synthesis choice, and reasoning', async () => {
+  const events = [];
+  let plannerInput;
+  const result = await runCampaign({
+    campaignId: 'planner-observability',
+    round: 2,
+    tasks: [
+      { task: 'minimal plan', unitId: 'candidate-minimal', perspective: 'minimal-change' },
+      { task: 'refactor plan', unitId: 'candidate-refactor', perspective: 'refactor-first' },
+    ],
+    target: 'unused-by-adapter', gate: [], concurrency: 2, tokenBudget: 1000,
+    reporter: (event) => events.push(event),
+    runUnit: async ({ runId }) => ({
+      ...successFacts(runId),
+      outcome: 'review-ready',
+      gateStatus: 'passed',
+      verdict: 'NO_BLOCKERS',
+      verdictSource: 'result',
+      verifierFindings: `${runId} correctness reasoning`,
+      intentVerdict: 'NO_BLOCKERS',
+      intentVerdictSource: 'assistant',
+      intentVerifierFindings: `${runId} intent reasoning`,
+    }),
+    plannerSynthesis: async (input) => {
+      plannerInput = input;
+      return {
+        decision: 'synthesize-both',
+        selectedUnitIds: ['candidate-minimal', 'candidate-refactor'],
+        reasoning: 'Use the minimal surface with the refactor candidate structural boundary.',
+      };
+    },
+  });
+
+  assert.equal(result.round, 2);
+  assert.deepEqual(events.filter((event) => event.type === 'candidate_generated')
+    .map((event) => [event.unitId, event.perspective]), [
+    ['candidate-minimal', 'minimal-change'],
+    ['candidate-refactor', 'refactor-first'],
+  ]);
+  assert.deepEqual(plannerInput.reviews.map((review) => ({
+    unitId: review.unitId,
+    complete: review.complete,
+    correctness: review.correctness.findings,
+    intent: review.intent.findings,
+  })), [
+    {
+      unitId: 'candidate-minimal', complete: true,
+      correctness: 'candidate-minimal correctness reasoning',
+      intent: 'candidate-minimal intent reasoning',
+    },
+    {
+      unitId: 'candidate-refactor', complete: true,
+      correctness: 'candidate-refactor correctness reasoning',
+      intent: 'candidate-refactor intent reasoning',
+    },
+  ]);
+  const synthesis = events.find((event) => event.type === 'synthesis');
+  assert.equal(synthesis.decision, 'synthesize-both');
+  assert.match(synthesis.reasoning, /minimal surface.*structural boundary/);
+  assert.deepEqual(synthesis.selectedUnitIds, ['candidate-minimal', 'candidate-refactor']);
+  assert.deepEqual({ unitId: synthesis.unitId, unitKind: synthesis.unitKind },
+    { unitId: null, unitKind: null });
+});
+
+test('a missing required review is explicit planner input rather than silent absence', async () => {
+  const events = [];
+  let reviews;
+  await runCampaign({
+    campaignId: 'missing-review',
+    tasks: [{ task: 'candidate', unitId: 'missing-correctness', perspective: 'risk-first' }],
+    target: 'unused-by-adapter', gate: [], concurrency: 1, tokenBudget: 1000,
+    reporter: (event) => events.push(event),
+    runUnit: async ({ runId }) => ({
+      ...successFacts(runId),
+      outcome: 'verifier-failed',
+      gateStatus: 'passed',
+      verdict: null,
+      intentVerdict: 'NO_BLOCKERS',
+      intentVerifierFindings: 'intent completed',
+    }),
+    plannerSynthesis: (input) => {
+      reviews = input.reviews;
+      return { decision: 'stop', reasoning: 'Correctness review is missing.' };
+    },
+  });
+  assert.deepEqual(reviews[0].missing, ['correctness']);
+  assert.equal(reviews[0].complete, false);
+  const event = events.find((candidate) => candidate.type === 'review_received');
+  assert.deepEqual(event.missing, ['correctness']);
+  assert.equal(event.complete, false);
 });
 
 test('broken campaign and unit event sinks cannot change campaign outcomes', async () => {
@@ -571,6 +675,22 @@ test('broken campaign and unit event sinks cannot change campaign outcomes', asy
   assert.equal(result.rollup.counts.succeeded, 2);
 });
 
+test('attaching campaign observability does not change the aggregate result', async () => {
+  const options = {
+    campaignId: 'reporter-transparent',
+    tasks: [
+      { task: 'one', unitId: 'transparent-one' },
+      { task: 'two', unitId: 'transparent-two' },
+    ],
+    target: 'unused-by-adapter', gate: [], concurrency: 1, tokenBudget: 1000,
+    runUnit: async ({ runId }) => successFacts(runId, 3),
+  };
+  const withoutReporter = await runCampaign(options);
+  const withReporter = await runCampaign({ ...options, reporter: () => {} });
+  assert.deepEqual(withReporter, withoutReporter,
+    'a reporter must add events only, never fields, timers, files, or changed campaign behavior');
+});
+
 test('the single-writer campaign stream is valid NDJSON and stays outside every unit diff', async () => {
   mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
   const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.campaign-'));
@@ -579,6 +699,7 @@ test('the single-writer campaign stream is valid NDJSON and stays outside every 
   const campaignEventsPath = join(campaignDirectory, 'campaign-events.jsonl');
   mkdirSync(campaignDirectory);
   writeFileSync(join(target, 'seed.txt'), 'seed\n');
+  let observedDuringWrites = 0;
   try {
     const result = await runCampaign({
       campaignId: 'stream-campaign',
@@ -588,7 +709,14 @@ test('the single-writer campaign stream is valid NDJSON and stays outside every 
       concurrency: 2,
       tokenBudget: 1000,
       scratchRoot,
-      reporter: (event) => appendFileSync(campaignEventsPath, `${JSON.stringify(event)}\n`),
+      reporter: (event) => {
+        appendFileSync(campaignEventsPath, `${JSON.stringify(event)}\n`);
+        const liveText = readFileSync(campaignEventsPath, 'utf8');
+        const liveEvents = parsePartialEventStream(liveText, campaignEventsPath);
+        assert.equal(liveEvents.at(-1)?.type, event.type,
+          'every append must leave the live campaign stream parseable through its newest line');
+        observedDuringWrites++;
+      },
       runOptions: {
         gateRetries: 0,
         adapters: {
@@ -610,7 +738,19 @@ test('the single-writer campaign stream is valid NDJSON and stays outside every 
       assert.doesNotThrow(() => JSON.parse(line), `campaign line ${index + 1} is invalid JSON`);
       return JSON.parse(line);
     });
+    assert.equal(observedDuringWrites, parsed.length,
+      'positive control: every campaign line was read while the writer was still active');
     assert.ok(parsed.length >= 8, 'campaign, round, and two unit lifecycles must be present');
+    const campaignBase = parsed.filter((event) => event.stage === 'isolate'
+      && event.scope === 'campaign-base');
+    assert.deepEqual(campaignBase.map((event) => [event.type, event.verdict ?? null]), [
+      ['start', null], ['finish', 'ready'],
+    ]);
+    assert.ok(campaignBase.every((event) => event.unitId === null && event.unitKind === null),
+      'shared-base isolation belongs to the campaign, never an arbitrary concurrent unit');
+    appendFileSync(campaignEventsPath, '{"ts":"partial-campaign-record"');
+    assert.deepEqual(parsePartialEventStream(readFileSync(campaignEventsPath, 'utf8')),
+      parsed, 'a partial final append must not hide or corrupt any completed campaign record');
     for (const entry of result.units) {
       const diff = readFileSync(join(entry.facts.dir, 'CHANGES.diff'), 'utf8');
       assert.match(diff, new RegExp(`${entry.unitId}[.]txt`),

@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { HARNESS_ARTIFACTS } from '../src/run.js';
+import { createEvent } from '../src/events.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const licensePath = fileURLToPath(new URL('../LICENSE', import.meta.url));
@@ -85,9 +86,49 @@ test('the optional Logdy layout is valid JSON with explicit event columns', () =
   const names = config.columns.map((column) => column.name);
   for (const name of [
     'Time', 'Run', 'Stage', 'Type', 'File', 'Command', 'Code', 'Verdict',
-    'Campaign', 'Round', 'Unit', 'Kind',
+    'Campaign', 'Round', 'Unit', 'Kind', 'Perspective', 'Decision', 'Reasoning', 'Scope',
   ]) {
     assert.ok(names.includes(name), `missing Logdy column: ${name}`);
   }
   assert.ok(config.columns.every((column) => typeof column.handlerTsCode === 'string'));
+  const enriched = createEvent({
+    runId: 'candidate-a',
+    campaignId: 'campaign-a',
+    round: 2,
+    unitId: 'candidate-a',
+    unitKind: 'candidate',
+    stage: 'planner',
+    type: 'candidate_generated',
+    fields: {
+      perspective: 'test-first',
+      decision: 'synthesize-a',
+      reasoning: 'The review evidence covers the risky seam.',
+      scope: 'campaign-context',
+    },
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+  });
+  const rendered = Object.fromEntries(config.columns.map((column) => {
+    const executable = column.handlerTsCode.replace('(line: Message): CellHandler', '(line)');
+    const handler = vm.runInNewContext(executable);
+    return [column.name, handler({ json_content: enriched }).text];
+  }));
+  assert.deepEqual({
+    Campaign: rendered.Campaign,
+    Round: rendered.Round,
+    Unit: rendered.Unit,
+    Kind: rendered.Kind,
+    Perspective: rendered.Perspective,
+    Decision: rendered.Decision,
+    Reasoning: rendered.Reasoning,
+    Scope: rendered.Scope,
+  }, {
+    Campaign: 'campaign-a',
+    Round: '2',
+    Unit: 'candidate-a',
+    Kind: 'candidate',
+    Perspective: 'test-first',
+    Decision: 'synthesize-a',
+    Reasoning: 'The review evidence covers the risky seam.',
+    Scope: 'campaign-context',
+  });
 });

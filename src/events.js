@@ -1,13 +1,16 @@
 export const EVENT_STAGES = Object.freeze([
   'campaign',
   'round',
+  'planner',
   'unit',
   'isolate',
+  'merge',
   'executor',
   'gate',
   'diff',
   'verify',
   'report',
+  'journal',
 ]);
 
 export const EVENT_TYPES = Object.freeze([
@@ -23,6 +26,9 @@ export const EVENT_TYPES = Object.freeze([
   'waiting',
   'released',
   'skipped',
+  'candidate_generated',
+  'review_received',
+  'synthesis',
 ]);
 
 export const UNIT_KINDS = Object.freeze(['candidate', 'node', 'merge']);
@@ -35,6 +41,9 @@ export const EVENT_PAIRS = Object.freeze([
   'campaign/finish',
   'round/start',
   'round/finish',
+  'planner/candidate_generated',
+  'planner/review_received',
+  'planner/synthesis',
   'unit/start',
   'unit/finish',
   'unit/not_dispatched',
@@ -44,6 +53,9 @@ export const EVENT_PAIRS = Object.freeze([
   'isolate/start',
   'isolate/finish',
   'isolate/stalled',
+  'merge/start',
+  'merge/finish',
+  'merge/stalled',
   'executor/start',
   'executor/finish',
   'executor/file_change',
@@ -64,6 +76,31 @@ export const EVENT_PAIRS = Object.freeze([
   'report/start',
   'report/finish',
   'report/stalled',
+  'journal/start',
+  'journal/finish',
+]);
+
+// The aggregate stream is intentionally smaller than a unit stream: the orchestrator is
+// its only writer, and detailed executor/gate/verifier records remain one-writer-per-unit.
+// This list is a second conformance surface for campaign boundaries and orchestration.
+export const CAMPAIGN_EVENT_PAIRS = Object.freeze([
+  'campaign/start',
+  'campaign/finish',
+  'round/start',
+  'round/finish',
+  'planner/candidate_generated',
+  'planner/review_received',
+  'planner/synthesis',
+  'unit/start',
+  'unit/finish',
+  'unit/not_dispatched',
+  'unit/waiting',
+  'unit/released',
+  'unit/skipped',
+  'isolate/start',
+  'isolate/finish',
+  'merge/start',
+  'merge/finish',
 ]);
 
 const STAGES = new Set(EVENT_STAGES);
@@ -108,6 +145,9 @@ export function createEvent({
     }
     if (unitKind !== null && !KINDS.has(unitKind)) {
       throw new TypeError(`unknown event unit kind: ${unitKind}`);
+    }
+    if ((unitId === null) !== (unitKind === null)) {
+      throw new TypeError('event unitId and unitKind must both be null or both identify a unit');
     }
   }
 
@@ -233,6 +273,16 @@ function detailFor(event) {
     return `gap=${oneLine(event.gapMs)}ms last=${oneLine(last.stage)}/${oneLine(last.type)}`;
   }
   if (event.stage === 'isolate') {
+    if (event.scope === 'campaign-base') {
+      return event.type === 'start'
+        ? `preparing shared campaign base source=${oneLine(event.source)}`
+        : `campaign base ${oneLine(event.verdict)} repository=${oneLine(event.repository)}`;
+    }
+    if (event.scope === 'campaign-result') {
+      return event.type === 'start'
+        ? `recording campaign result branch=${oneLine(event.branch)}`
+        : `campaign result ${oneLine(event.verdict)} commit=${oneLine(event.commit)}`;
+    }
     return event.type === 'start'
       ? `creating isolated copy base=${oneLine(event.baseRef)} branch=${oneLine(event.branch)}`
       : `created ${oneLine(event.dir)} source=${oneLine(event.source)} `
@@ -281,6 +331,17 @@ function detailFor(event) {
   if (event.stage === 'round') {
     return `${event.type === 'start' ? 'started' : 'finished'} round=${oneLine(event.round)}`;
   }
+  if (event.stage === 'planner') {
+    if (event.type === 'candidate_generated') {
+      return `candidate=${oneLine(event.unitId)} perspective=${oneLine(event.perspective)}`;
+    }
+    if (event.type === 'review_received') {
+      return `reviews unit=${oneLine(event.unitId)} complete=${oneLine(event.complete)}`
+        + ` correctness=${oneLine(event.correctness?.verdict)}`
+        + ` intent=${oneLine(event.intent?.verdict)}`;
+    }
+    return `synthesis=${oneLine(event.decision)} reasoning=${oneLine(event.reasoning)}`;
+  }
   if (event.stage === 'unit') {
     if (event.type === 'not_dispatched') {
       return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} not-dispatched reason=${oneLine(event.reason)}`;
@@ -305,6 +366,16 @@ function detailFor(event) {
     }
     return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} ${event.type}`
       + (event.outcome ? ` outcome=${oneLine(event.outcome)}` : '');
+  }
+  if (event.stage === 'merge') {
+    return event.type === 'start'
+      ? `preparing parents=${oneLine(event.parentUnitIds?.join(','))}`
+      : `finished verdict=${oneLine(event.verdict)} reason=${oneLine(event.reason)}`;
+  }
+  if (event.stage === 'journal') {
+    return event.type === 'start'
+      ? `generating from=${oneLine(event.factsPath)}`
+      : `written ${oneLine(event.file ?? event.notePath)}`;
   }
   return [command(event), oneLine(event.file), oneLine(event.verdict)].filter(Boolean).join(' ');
 }

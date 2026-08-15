@@ -85,6 +85,8 @@ test('a clean fan-in merge contains both distinctive parent changes and runs bot
     ].join('')],
   };
   const verifierPasses = [];
+  const campaignEvents = [];
+  const unitEvents = new Map();
   try {
     const result = await runCampaign({
       campaignId: 'clean-fanin',
@@ -94,6 +96,12 @@ test('a clean fan-in merge contains both distinctive parent changes and runs bot
       concurrency: 2,
       tokenBudget: 1000,
       scratchRoot: dirs.scratchRoot,
+      reporter: (event) => campaignEvents.push(event),
+      unitReporterFactory: ({ unitId }) => {
+        const events = [];
+        unitEvents.set(unitId, events);
+        return (event) => events.push(event);
+      },
       runOptions: {
         gateRetries: 0,
         adapters: {
@@ -166,6 +174,29 @@ test('a clean fan-in merge contains both distinctive parent changes and runs bot
     assert.match(intent, /intent verifier.*every parent behavior survives.*seam is tested/i);
     assert.equal(Object.hasOwn(result.units[0].facts, 'unitKind'), false,
       'ordinary units retain their existing run-facts shape');
+    const mergeCampaignEvents = campaignEvents.filter((event) => event.unitId === 'clean-join'
+      && event.stage === 'merge');
+    assert.deepEqual(mergeCampaignEvents.map((event) => `${event.type}:${event.verdict ?? ''}`),
+      ['start:', 'finish:prepared'],
+      'the campaign stream must expose merge-context preparation and its decision');
+    const mergeUnitEvents = unitEvents.get('clean-join');
+    assert.ok(mergeUnitEvents.some((event) => event.stage === 'merge' && event.type === 'start'),
+      'the unit stream must expose mechanical merge work');
+    assert.ok(mergeUnitEvents.some((event) => event.stage === 'merge'
+      && event.type === 'finish' && event.verdict === 'merged'));
+    const baselineGate = mergeUnitEvents.find((event) => (
+      event.stage === 'gate' && event.type === 'gate_command' && event.scope === 'merge-baseline'
+    ));
+    assert.ok(baselineGate, 'the merge baseline-count gate command must not be invisible');
+    assert.equal(baselineGate.attempt, 0);
+    assert.deepEqual({
+      campaignId: baselineGate.campaignId,
+      round: baselineGate.round,
+      unitId: baselineGate.unitId,
+      unitKind: baselineGate.unitKind,
+    }, {
+      campaignId: 'clean-fanin', round: 1, unitId: 'clean-join', unitKind: 'merge',
+    });
   } finally {
     cleanup(dirs);
   }

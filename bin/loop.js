@@ -10,7 +10,7 @@ import { run } from '../src/run.js';
 import { CAMPAIGN_EVENTS_FILENAME, runCampaign } from '../src/campaign.js';
 import { exitCodeFor } from '../src/exit.js';
 import { formatEventSummary } from '../src/events.js';
-import { formatRunStatus, readRunStatus } from '../src/status.js';
+import { formatStatus, readStatus } from '../src/status.js';
 
 // Short path, outside OneDrive and outside AppData (both are rejected by
 // assertSafeScratchRoot; AppData is MSIX-redirected under a packaged host).
@@ -51,7 +51,7 @@ async function main() {
     process.exit(2);
   }
   if (opts.command === 'status') {
-    process.stdout.write(formatRunStatus(readRunStatus(opts.runDirectory)));
+    process.stdout.write(formatStatus(readStatus(opts.runDirectory)));
     return;
   }
   if (opts.command === 'dashboard') {

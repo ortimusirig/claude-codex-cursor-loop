@@ -166,6 +166,31 @@ export async function run(opts) {
   const mergeResolutions = [];
   let mergeProgress = null;
   let activeConflict = null;
+  let observedAdvanceMerge;
+  if (merge !== undefined) observedAdvanceMerge = async (options) => {
+    reportEvent(eventReporter, runId, 'merge', 'start', {
+      operation: 'advance',
+      parentUnitIds: options.parents.map((parent) => parent.unitId),
+      nextParentIndex: options.nextParentIndex ?? 1,
+    });
+    try {
+      const progress = await advanceMerge(options);
+      reportEvent(eventReporter, runId, 'merge', 'finish', {
+        operation: 'advance',
+        verdict: progress.complete ? 'merged' : 'conflict',
+        nextParentIndex: progress.nextParentIndex,
+        ...(progress.conflict ? { conflict: progress.conflict } : {}),
+      });
+      return progress;
+    } catch (error) {
+      reportEvent(eventReporter, runId, 'merge', 'finish', {
+        operation: 'advance',
+        verdict: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  };
   if (merge !== undefined) {
     if (unitKind !== 'merge') throw new Error('merge context requires unitKind "merge"');
     if (!Array.isArray(merge.parents) || merge.parents.length < 2) {
@@ -174,7 +199,7 @@ export async function run(opts) {
     if (!merge.testCounts || !Number.isSafeInteger(merge.testCounts.required)) {
       throw new Error('merge unit requires derived test counts');
     }
-    mergeProgress = await advanceMerge({
+    mergeProgress = await observedAdvanceMerge({
       cwd: iso.dir,
       parents: merge.parents,
       unitId: runId,
@@ -261,26 +286,65 @@ export async function run(opts) {
     if (exec.timedOut || !activeConflict) break;
 
     const ledger = readMergeLedger({ cwd: iso.dir, conflict: activeConflict, executorResult: exec });
+    reportEvent(eventReporter, runId, 'merge', 'start', {
+      operation: 'review-resolution',
+      parentUnitIds: [activeConflict.parentUnitId],
+      paths: activeConflict.paths,
+    });
     if (!ledger.ok) {
       mergePreparationFailure = ledger.reason;
+      reportEvent(eventReporter, runId, 'merge', 'finish', {
+        operation: 'review-resolution',
+        verdict: 'failed',
+        reason: ledger.reason,
+      });
       break;
     }
     mergeResolutions.push(...ledger.resolutions);
+    reportEvent(eventReporter, runId, 'merge', 'finish', {
+      operation: 'review-resolution',
+      verdict: ledger.status,
+      reasoning: ledger.resolutions.map((resolution) => ({
+        path: resolution.path,
+        chosen: resolution.chosen,
+        reason: resolution.reason,
+      })),
+    });
     if (ledger.status === 'conflicting-intent') {
       conflictingIntent = true;
       break;
     }
-    const concludedConflict = await concludeConflict({
-      cwd: iso.dir,
-      conflict: activeConflict,
-      unitId: runId,
+    reportEvent(eventReporter, runId, 'merge', 'start', {
+      operation: 'conclude-conflict',
+      parentUnitIds: [activeConflict.parentUnitId],
+      paths: activeConflict.paths,
     });
+    let concludedConflict;
+    try {
+      concludedConflict = await concludeConflict({
+        cwd: iso.dir,
+        conflict: activeConflict,
+        unitId: runId,
+      });
+      reportEvent(eventReporter, runId, 'merge', 'finish', {
+        operation: 'conclude-conflict',
+        verdict: concludedConflict.ok ? 'resolved' : 'failed',
+        ...(concludedConflict.reason ? { reason: concludedConflict.reason } : {}),
+      });
+    } catch (error) {
+      reportEvent(eventReporter, runId, 'merge', 'finish', {
+        operation: 'conclude-conflict',
+        verdict: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!concludedConflict.ok) {
       mergePreparationFailure = concludedConflict.reason;
       break;
     }
     clearMergeLedger(iso.dir);
-    mergeProgress = await advanceMerge({
+    mergeProgress = await observedAdvanceMerge({
       cwd: iso.dir,
       parents: merge.parents,
       nextParentIndex: mergeProgress.nextParentIndex + 1,

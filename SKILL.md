@@ -12,7 +12,7 @@ The controller (this Claude session) authors a plan, then invokes:
 For several plans against the same target and gate, invoke the separate batch engine (one
 repeated `--task` per unit):
 
-    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--depends-on CHILD=PARENT ...]
+    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...]
 
 - **Gate config** (`gate.json`): a JSON array of `{ "bin": "...", "args": ["..."] }`; pass/fail is by exit code only.
 - Codex writes only inside a git-isolated copy; the real tree is never touched.

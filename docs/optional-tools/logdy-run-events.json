@@ -120,6 +120,38 @@
       "idx": 14,
       "width": 100,
       "faceted": true
+    },
+    {
+      "id": "ccc-perspective",
+      "name": "Perspective",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.perspective || \"\") }; }",
+      "idx": 15,
+      "width": 180,
+      "faceted": true
+    },
+    {
+      "id": "ccc-decision",
+      "name": "Decision",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.decision || event.verdict || \"\") }; }",
+      "idx": 16,
+      "width": 190,
+      "faceted": true
+    },
+    {
+      "id": "ccc-reasoning",
+      "name": "Reasoning",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.reasoning || event.reason || \"\") }; }",
+      "idx": 17,
+      "width": 360,
+      "faceted": false
+    },
+    {
+      "id": "ccc-scope",
+      "name": "Scope",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.scope || event.operation || \"\") }; }",
+      "idx": 18,
+      "width": 170,
+      "faceted": true
     }
   ],
   "settings": {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 export const EVENTS_FILENAME = 'events.jsonl';
+export const CAMPAIGN_EVENTS_FILENAME = 'campaign-events.jsonl';
 
 export function parsePartialEventStream(text, source = EVENTS_FILENAME) {
   const events = [];
@@ -90,5 +91,42 @@ export function readEventStream(runDirectory, { allowMissing = false } = {}) {
     ...located,
     runId: runIdForEventStream(located.eventsPath, events, located.directory),
     events,
+  };
+}
+
+export function readCampaignEventStream(campaignDirectory, { allowMissing = false } = {}) {
+  const directory = resolve(campaignDirectory);
+  let stat;
+  try {
+    stat = statSync(directory);
+  } catch (error) {
+    if (allowMissing && error?.code === 'ENOENT') {
+      return { directory, eventsPath: null, events: [], campaignId: basename(directory) };
+    }
+    throw error;
+  }
+  if (!stat.isDirectory()) {
+    throw new TypeError(`status path is not a directory: ${directory}`);
+  }
+  const eventsPath = join(directory, CAMPAIGN_EVENTS_FILENAME);
+  if (!existsSync(eventsPath)) {
+    if (allowMissing) return { directory, eventsPath: null, events: [], campaignId: basename(directory) };
+    throw new Error(`campaign directory does not contain ${CAMPAIGN_EVENTS_FILENAME}: ${directory}`);
+  }
+  const events = parsePartialEventStream(
+    readFileSync(eventsPath, { encoding: 'utf8', flag: 'r' }),
+    eventsPath,
+  );
+  const campaignIds = [...new Set(events
+    .map((event) => event?.campaignId)
+    .filter((campaignId) => typeof campaignId === 'string' && campaignId !== ''))];
+  if (campaignIds.length > 1) {
+    throw new Error(`${CAMPAIGN_EVENTS_FILENAME} contains several campaigns`);
+  }
+  return {
+    directory,
+    eventsPath,
+    events,
+    campaignId: campaignIds[0] ?? basename(directory),
   };
 }

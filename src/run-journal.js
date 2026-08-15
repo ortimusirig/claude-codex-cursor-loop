@@ -9,6 +9,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildReportMarkdown } from './report.js';
+import { reportEvent } from './events.js';
 
 export const RUN_FACTS_FILENAME = 'ccc-runfacts.json';
 export const EVENTS_FILENAME = 'events.jsonl';
@@ -193,15 +194,32 @@ function notePathFor(projectRoot, runId) {
   return { notePath, runsDir };
 }
 
-function writeRunJournalInput({ facts, factsPath, events }) {
+function journalIdentity(facts, supplied) {
+  if (supplied !== undefined) return supplied;
+  if (typeof facts.campaignId !== 'string' || facts.campaignId === '') return undefined;
+  return {
+    campaignId: facts.campaignId,
+    round: facts.round,
+    unitId: facts.unitId ?? facts.runId,
+    unitKind: facts.unitKind,
+  };
+}
+
+function writeRunJournalInput({ facts, factsPath, events }, { reporter, identity } = {}) {
   const { notePath, runsDir } = notePathFor(DEFAULT_PROJECT_ROOT, facts.runId);
+  const eventIdentity = journalIdentity(facts, identity);
+  reportEvent(reporter, facts.runId, 'journal', 'start', { factsPath }, eventIdentity);
   mkdirSync(runsDir, { recursive: true });
   writeFileSync(notePath, buildRunJournalNote(facts, events), 'utf8');
+  reportEvent(reporter, facts.runId, 'journal', 'finish', {
+    file: relative(DEFAULT_PROJECT_ROOT, notePath).replaceAll('\\', '/'),
+    notePath,
+  }, eventIdentity);
   return { factsPath, notePath, runId: facts.runId };
 }
 
-export function generateRunJournal(inputPath) {
-  return writeRunJournalInput(readRunJournalInput(inputPath));
+export function generateRunJournal(inputPath, options) {
+  return writeRunJournalInput(readRunJournalInput(inputPath), options);
 }
 
 export function findRunFacts(scratchRoot) {
@@ -221,7 +239,7 @@ export function findRunFacts(scratchRoot) {
   return found;
 }
 
-export function generateRunJournalCampaign(scratchRoot) {
+export function generateRunJournalCampaign(scratchRoot, { reporter, reporterFactory } = {}) {
   const factsPaths = findRunFacts(scratchRoot);
   const inputs = factsPaths.map(readRunJournalInput);
   const runIds = new Set();
@@ -231,5 +249,11 @@ export function generateRunJournalCampaign(scratchRoot) {
     }
     runIds.add(facts.runId);
   }
-  return inputs.map(writeRunJournalInput);
+  return inputs.map((input) => {
+    let unitReporter = reporter;
+    if (typeof reporterFactory === 'function') {
+      try { unitReporter = reporterFactory(input.facts); } catch { unitReporter = undefined; }
+    }
+    return writeRunJournalInput(input, { reporter: unitReporter });
+  });
 }

@@ -91,12 +91,14 @@ test('parses repeated batch plans with bounded concurrency, budget, and unit ide
     '--token-budget', '9000',
     '--unit-kind', 'candidate',
     '--unit-kind', 'merge',
+    '--perspective', 'minimal-change',
+    '--perspective', 'refactor-first',
     '--quiet',
   ]);
   assert.equal(parsed.command, 'batch');
   assert.deepEqual(parsed.tasks, [
-    { task: 'candidate-a.md', unitKind: 'candidate' },
-    { task: 'candidate-b.md', unitKind: 'merge' },
+    { task: 'candidate-a.md', unitKind: 'candidate', perspective: 'minimal-change' },
+    { task: 'candidate-b.md', unitKind: 'merge', perspective: 'refactor-first' },
   ]);
   assert.equal(parsed.concurrency, 2);
   assert.equal(parsed.tokenBudget, 9000);
@@ -173,4 +175,8 @@ test('batch rejects unsafe fan-out, bad kinds, and mismatched per-task kinds', (
     'batch', '--task', 'a', '--task', 'b', '--task', 'c', '--target', 't', '--gate', 'g',
     '--unit-kind', 'candidate', '--unit-kind', 'node',
   ]), /once.*all.*once per/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--task', 'b', '--target', 't', '--gate', 'g',
+    '--perspective', 'only-one',
+  ]), /perspective.*once per/i);
 });

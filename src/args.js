@@ -96,6 +96,7 @@ export function parseArgs(argv) {
         'token-budget': { type: 'string' },
         'unit-kind': { type: 'string', multiple: true },
         'unit-id': { type: 'string', multiple: true },
+        perspective: { type: 'string', multiple: true },
         'depends-on': { type: 'string', multiple: true },
       } : {}),
       quiet: { type: 'boolean' },
@@ -142,6 +143,13 @@ export function parseArgs(argv) {
   if (unitIds && new Set(unitIds).size !== unitIds.length) {
     throw new Error(`duplicate --unit-id: ${unitIds.find((id, index) => unitIds.indexOf(id) !== index)}`);
   }
+  const perspectives = values.perspective;
+  if (perspectives !== undefined && perspectives.length !== tasks.length) {
+    throw new Error('--perspective must be given once per --task');
+  }
+  if (perspectives?.some((perspective) => perspective.trim() === '')) {
+    throw new Error('--perspective values must be non-empty');
+  }
   const rawEdges = values['depends-on'] ?? [];
   if (rawEdges.length > 0 && unitIds === undefined) {
     throw new Error('--depends-on requires one --unit-id per --task');
@@ -166,6 +174,7 @@ export function parseArgs(argv) {
       task,
       unitKind: rawKinds.length === 1 ? rawKinds[0] : rawKinds[index],
       ...(unitIds === undefined ? {} : { unitId: unitIds[index] }),
+      ...(perspectives === undefined ? {} : { perspective: perspectives[index] }),
     };
     const parents = parentsByChild.get(unit.unitId) ?? [];
     if (parents.length === 1) unit.dependsOn = parents[0];

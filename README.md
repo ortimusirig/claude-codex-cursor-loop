@@ -62,8 +62,8 @@ to run side-by-side with an existing copy).
 
 ```
 node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--quiet]
-node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind KIND] [--unit-id ID ...] [--depends-on CHILD=PARENT ...] [--quiet]
-node bin/loop.js status <run-directory>
+node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
+node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 ```
 
@@ -88,6 +88,7 @@ worktree, gate, two read-only verifier passes, run facts, and `events.jsonl`.
 | `--token-budget` | 12,500,000 | positive campaign-wide token count |
 | `--unit-kind` | `candidate` | `candidate`, `node`, or `merge`; give once for every task or once per `--task` |
 | `--unit-id` | generated | stable unit ID; when used, give once per `--task` |
+| `--perspective` | `not-declared` in the event stream | planner perspective; when used, give once per `--task` |
 | `--depends-on` | none | `CHILD=PARENT`; repeat for edges and repeat the same child for fan-in |
 
 The budget counts input plus output tokens. Cached input and reasoning output are already
@@ -159,14 +160,23 @@ events remain in each unit's own stream. Campaign/round records carry null unit 
 because they describe no individual unit; unit lifecycle and per-unit records carry the exact
 `campaignId`, round, `unitId`, and `unitKind`.
 
+The campaign stream also records the shared-base decision, merge-context preparation, and the
+planner data path. Each candidate gets `planner/candidate_generated` with its perspective,
+each dispatched unit gets one attributed `planner/review_received` containing both review
+seats (or an explicit missing list), and `planner/synthesis` records the selected decision and
+reasoning before the round ends. The programmatic `runCampaign` API can accept a
+`plannerSynthesis` object or callback; without one it explicitly returns the attributed review
+set instead of inventing a comparison.
+
 A batch exits 0 only when every dispatched unit has a successful existing run outcome and the
 budget was not exceeded. Any failed unit takes precedence as `campaign-failed` (exit 6);
 otherwise a budget overage is `budget-exhausted` (exit 7). Failure of one unit never cancels
 its peers.
 
-`status` is a separate, human-readable view of a run in progress. Pass either the isolated
-`w` directory or its parent run directory. It reads `events.jsonl`, tolerates a final line
-that is still being appended, and never writes to the run or signals its processes.
+`status` is a separate, human-readable view of a run or campaign in progress. Pass either the
+isolated `w` directory, its parent run directory, or a campaign directory containing
+`campaign-events.jsonl`. It tolerates a final line that is still being appended, distinguishes
+every campaign unit, and never writes to the run or signals its processes.
 
 `dashboard` serves the same event data as a live, side-by-side browser view. Pass a run
 directory for one card, `--scratch-root <directory>` for every run under a campaign root, or
@@ -205,9 +215,15 @@ package directory (replace `<runId>` with the active run ID):
 logdy follow "C:/ccc/w/<runId>/w/events.jsonl" --full-read --config "docs/optional-tools/logdy-run-events.json" --no-analytics --no-updates
 ```
 
+For the aggregate planner/lifecycle stream, follow
+`C:/ccc/w/<campaignId>/campaign-events.jsonl` with the same options.
+
 For a custom `CCC_SCRATCH_ROOT`, substitute that root before `/<runId>/w/events.jsonl`.
 `--full-read` loads events already written and `follow` keeps reading appended lines. The
-checked-in config exposes the event envelope and common stage fields as sortable table columns.
+checked-in config exposes the event envelope, campaign identity, perspective, decision,
+reasoning, and scope as sortable table columns. It remains useful for filtering and drill-down;
+the observability audit concludes that an interleaved flat table is not an adequate primary
+current-state view for many concurrent units.
 
 Do **not** use `loop run ... | logdy`: stdout is the machine-readable run-facts contract,
 not the event stream. Logdy must follow the isolated `events.jsonl` file.

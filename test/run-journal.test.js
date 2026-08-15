@@ -227,3 +227,37 @@ test('campaign mode recursively regenerates every discovered run', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('journal generation emits attributed start and finish events without trusting the sink', () => {
+  const root = mkdtempSync(join(tmpdir(), 'run-journal-events-'));
+  const facts = {
+    ...fixtureFacts,
+    runId: `2026-08-15T02-00-00-000Z-journal-events-${process.pid}`,
+    campaignId: 'journal-campaign',
+    round: 3,
+    unitId: 'journal-unit',
+    unitKind: 'merge',
+  };
+  const workDir = join(root, facts.runId, 'w');
+  const factsPath = join(workDir, 'ccc-runfacts.json');
+  const notePath = join(projectRunsDir, `${facts.runId}.md`);
+  const events = [];
+  mkdirSync(workDir, { recursive: true });
+  writeFileSync(factsPath, JSON.stringify(facts));
+  try {
+    const result = generateRunJournal(factsPath, { reporter: (event) => events.push(event) });
+    assert.equal(result.notePath, notePath);
+    assert.deepEqual(events.map((event) => `${event.stage}/${event.type}`),
+      ['journal/start', 'journal/finish']);
+    assert.ok(events.every((event) => event.campaignId === 'journal-campaign'));
+    assert.ok(events.every((event) => event.round === 3));
+    assert.ok(events.every((event) => event.unitId === 'journal-unit'));
+    assert.ok(events.every((event) => event.unitKind === 'merge'));
+    assert.doesNotThrow(() => generateRunJournal(factsPath, {
+      reporter: () => { throw new Error('broken journal event sink'); },
+    }));
+  } finally {
+    rmSync(notePath, { force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});

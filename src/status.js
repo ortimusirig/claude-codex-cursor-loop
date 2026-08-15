@@ -1,13 +1,17 @@
-import { addUsage, EMPTY_USAGE } from './usage.js';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import {
+  CAMPAIGN_EVENTS_FILENAME,
   EVENTS_FILENAME,
   parsePartialEventStream,
+  readCampaignEventStream,
   readEventStream,
 } from './event-stream.js';
+import { addUsage, EMPTY_USAGE } from './usage.js';
 
 // Preserve the status module's public parser surface while both status and dashboard use
 // the same implementation.
-export { EVENTS_FILENAME, parsePartialEventStream };
+export { CAMPAIGN_EVENTS_FILENAME, EVENTS_FILENAME, parsePartialEventStream };
 
 function runIdsIn(events) {
   return [...new Set(events
@@ -62,6 +66,100 @@ export function readRunStatus(runDirectory, { now = Date.now() } = {}) {
   return { eventsPath, ...digestEvents(events, now, runId) };
 }
 
+function unitState(event, previous) {
+  if (event.stage !== 'unit') return previous;
+  if (event.type === 'start') return 'in-flight';
+  if (event.type === 'finish') return 'finished';
+  if (event.type === 'waiting') return 'waiting';
+  if (event.type === 'released') return 'ready';
+  if (event.type === 'skipped') return 'skipped';
+  if (event.type === 'not_dispatched') return 'not-dispatched';
+  return previous;
+}
+
+export function digestCampaignEvents(events, now = Date.now(), requestedCampaignId = null) {
+  const campaignIds = [...new Set(events
+    .map((event) => event?.campaignId)
+    .filter((campaignId) => typeof campaignId === 'string' && campaignId !== ''))];
+  const campaignId = requestedCampaignId ?? (campaignIds.length === 1 ? campaignIds[0] : null);
+  if (campaignId === null && campaignIds.length > 1) {
+    throw new Error(`a campaignId is required to digest mixed ${CAMPAIGN_EVENTS_FILENAME}`);
+  }
+  const campaignEvents = events.filter((event) => event?.campaignId === campaignId);
+  const units = new Map();
+  const rounds = new Map();
+  let synthesis = null;
+  for (const event of campaignEvents) {
+    if (Number.isSafeInteger(event.round)) {
+      const value = rounds.get(event.round) ?? {
+        round: event.round,
+        state: 'observed',
+        outcome: null,
+      };
+      if (event.stage === 'round' && event.type === 'start') value.state = 'running';
+      if (event.stage === 'round' && event.type === 'finish') {
+        value.state = 'finished';
+        value.outcome = event.outcome ?? null;
+      }
+      rounds.set(event.round, value);
+    }
+    if (event.stage === 'planner' && event.type === 'synthesis') synthesis = event;
+    if (typeof event.unitId !== 'string' || event.unitId === '') continue;
+    const unit = units.get(event.unitId) ?? {
+      unitId: event.unitId,
+      unitKind: event.unitKind ?? null,
+      round: event.round ?? null,
+      state: 'observed',
+      outcome: null,
+      perspective: null,
+      reviewsComplete: null,
+      currentStage: null,
+      currentType: null,
+      lastEvent: null,
+    };
+    unit.unitKind ??= event.unitKind ?? null;
+    unit.round ??= event.round ?? null;
+    unit.state = unitState(event, unit.state);
+    if (event.stage === 'unit' && event.type === 'finish') unit.outcome = event.outcome ?? null;
+    if (event.stage === 'planner' && event.type === 'candidate_generated') {
+      unit.perspective = event.perspective ?? null;
+    }
+    if (event.stage === 'planner' && event.type === 'review_received') {
+      unit.reviewsComplete = event.complete === true;
+    }
+    unit.currentStage = event.stage ?? null;
+    unit.currentType = event.type ?? null;
+    unit.lastEvent = event;
+    units.set(event.unitId, unit);
+  }
+  const lastEvent = campaignEvents.at(-1) ?? null;
+  const timestamp = Date.parse(lastEvent?.ts);
+  return {
+    mode: 'campaign',
+    campaignId,
+    campaignIds,
+    currentStage: lastEvent?.stage ?? null,
+    currentType: lastEvent?.type ?? null,
+    lastEvent,
+    gapMs: Number.isFinite(timestamp) ? Math.max(0, now - timestamp) : null,
+    rounds: [...rounds.values()].sort((left, right) => left.round - right.round),
+    units: [...units.values()],
+    synthesis,
+  };
+}
+
+export function readCampaignStatus(campaignDirectory, { now = Date.now() } = {}) {
+  const { eventsPath, events, campaignId } = readCampaignEventStream(campaignDirectory);
+  return { eventsPath, ...digestCampaignEvents(events, now, campaignId) };
+}
+
+export function readStatus(directory, options) {
+  const resolved = resolve(directory);
+  return existsSync(join(resolved, CAMPAIGN_EVENTS_FILENAME))
+    ? readCampaignStatus(resolved, options)
+    : { mode: 'run', ...readRunStatus(resolved, options) };
+}
+
 function duration(ms) {
   if (ms === null) return 'unknown';
   if (ms < 1000) return `${ms} ms`;
@@ -105,4 +203,41 @@ export function formatRunStatus(status) {
   }
   if (status.stalls.length === 0) lines.push('  (none)');
   return `${lines.join('\n')}\n`;
+}
+
+export function formatCampaignStatus(status) {
+  const lines = [
+    `Campaign: ${status.campaignId ?? '(unknown)'}`,
+    `Current stage: ${status.currentStage ?? '(none)'}`
+      + (status.currentType ? ` (${status.currentType})` : ''),
+    `Since last event: ${duration(status.gapMs)}`,
+    `Rounds (${status.rounds.length}):`,
+  ];
+  if (status.rounds.length === 0) lines.push('  (none)');
+  for (const round of status.rounds) {
+    lines.push(`  ${round.round}: ${round.state}${round.outcome ? ` -> ${round.outcome}` : ''}`);
+  }
+  lines.push(`Units (${status.units.length}):`);
+  if (status.units.length === 0) lines.push('  (none)');
+  for (const unit of status.units) {
+    const details = [
+      unit.outcome ? `outcome ${unit.outcome}` : '',
+      unit.perspective ? `perspective ${unit.perspective}` : '',
+      unit.reviewsComplete === null ? '' : `reviews ${unit.reviewsComplete ? 'complete' : 'incomplete'}`,
+      unit.currentStage ? `last ${unit.currentStage}/${unit.currentType}` : '',
+    ].filter(Boolean).join('; ');
+    lines.push(`  ${unit.unitId} [${unit.unitKind ?? 'unknown'}]: ${unit.state}`
+      + (details ? `; ${details}` : ''));
+  }
+  if (status.synthesis) {
+    lines.push(`Synthesis: ${status.synthesis.decision ?? '(unknown)'}`);
+    lines.push(`Reasoning: ${status.synthesis.reasoning ?? '(none)'}`);
+  } else {
+    lines.push('Synthesis: (none)');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export function formatStatus(status) {
+  return status?.mode === 'campaign' ? formatCampaignStatus(status) : formatRunStatus(status);
 }

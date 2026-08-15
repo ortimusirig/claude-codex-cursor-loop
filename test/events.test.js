@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertEventConformance,
+  CAMPAIGN_EVENT_PAIRS,
   createEvent,
   EVENT_PAIRS,
   EVENT_STAGES,
@@ -25,6 +26,7 @@ import { runCampaign } from '../src/campaign.js';
 import { runExecutor as realExecutor } from '../src/executor.js';
 import { runGate as realGate } from '../src/gate.js';
 import { run } from '../src/run.js';
+import { generateRunJournal } from '../src/run-journal.js';
 import { runVerifier as realVerifier } from '../src/verifier.js';
 
 const fakeWriter = fileURLToPath(new URL('../fixtures/fake-codex-writer.mjs', import.meta.url));
@@ -74,6 +76,10 @@ test('event construction validates declared pairs and campaign identity vocabula
     runId: 'bad-kind', campaignId: 'campaign', round: 1,
     unitId: 'unit', unitKind: 'planner', stage: 'unit', type: 'start',
   }), /unit kind/i);
+  assert.throws(() => createEvent({
+    runId: 'half-identity', campaignId: 'campaign', round: 1,
+    unitId: 'unit', unitKind: null, stage: 'unit', type: 'start',
+  }), /both be null|both identify/i);
   const event = createEvent({
     runId: 'unit', campaignId: 'campaign', round: 1,
     unitId: 'unit', unitKind: 'node', stage: 'unit', type: 'start',
@@ -281,20 +287,41 @@ test('reportEvent also swallows an asynchronous reporter rejection', async () =>
   await new Promise((resolve) => setImmediate(resolve));
 });
 
-test('fully exercised campaign emissions have set equality with the declared event vocabulary', async () => {
+test('fully exercised runs have exact pair equality with both event vocabularies', async () => {
   const scr = scratch();
   const tgt = target();
-  const events = [];
+  const campaignEvents = [];
+  const unitEvents = [];
+  const auxiliaryCampaignEvents = [];
+  const journalEvents = [];
+  let generatedNote;
+  const success = (runId, tokens = {}) => ({
+    runId,
+    outcome: 'review-ready',
+    gateStatus: 'passed',
+    verdict: 'NO_BLOCKERS',
+    verdictSource: 'result',
+    verifierFindings: 'correctness review',
+    intentVerdict: 'NO_BLOCKERS',
+    intentVerdictSource: 'result',
+    intentVerifierFindings: 'intent review',
+    tokens: { total: tokens },
+  });
   try {
     const result = await runCampaign({
       campaignId: 'event-conformance',
       tasks: [
-        { task: 'Write observed.txt.', unitKind: 'node', unitId: 'conformance-parent' },
+        {
+          task: 'Write observed.txt.',
+          unitKind: 'candidate',
+          unitId: '2026-08-15T12-00-00-000Z-conformance-parent',
+          perspective: 'test-first',
+        },
         {
           task: 'Observe the predecessor result.',
           unitKind: 'node',
-          unitId: 'conformance-child',
-          dependsOn: 'conformance-parent',
+          unitId: '2026-08-15T12-00-01-000Z-conformance-child',
+          dependsOn: '2026-08-15T12-00-00-000Z-conformance-parent',
         },
       ],
       target: tgt,
@@ -310,8 +337,8 @@ test('fully exercised campaign emissions have set equality with the declared eve
       concurrency: 1,
       tokenBudget: 1000,
       scratchRoot: scr,
-      reporter: (event) => events.push(event),
-      unitReporterFactory: () => (event) => events.push(event),
+      reporter: (event) => campaignEvents.push(event),
+      unitReporterFactory: () => (event) => unitEvents.push(event),
       runOptions: {
         gateRetries: 1,
         adapters: {
@@ -327,32 +354,94 @@ test('fully exercised campaign emissions have set equality with the declared eve
     });
     assert.equal(result.rollup.outcome, 'review-ready');
 
-    const UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN = [
-      // The budget is deliberately ample, so every planned unit dispatches.
-      'unit/not_dispatched',
-      // Both predecessor runs succeed, so the dependent is released rather than skipped.
-      'unit/skipped',
-      // Each watchdog pair needs a real period of silence longer than its threshold. Injecting
-      // those gaps would turn this healthy, fully exercised retry path into timeout scenarios.
-      'isolate/stalled',
-      'executor/stalled',
-      'gate/stalled',
-      'diff/stalled',
-      'verify/stalled',
-      'report/stalled',
+    await runCampaign({
+      campaignId: 'conformance-merge',
+      tasks: [
+        { task: 'parent a', unitId: 'merge-parent-a', unitKind: 'node' },
+        { task: 'parent b', unitId: 'merge-parent-b', unitKind: 'node' },
+        { task: 'merge', unitId: 'merge-child', dependsOn: ['merge-parent-a', 'merge-parent-b'] },
+      ],
+      target: 'adapter-target', gate: [], concurrency: 2, tokenBudget: 1000,
+      reporter: (event) => auxiliaryCampaignEvents.push(event),
+      runUnit: async ({ runId }) => success(runId),
+    });
+
+    await runCampaign({
+      campaignId: 'conformance-skip',
+      tasks: [
+        { task: 'fail', unitId: 'skip-parent', unitKind: 'node' },
+        { task: 'blocked', unitId: 'skip-child', unitKind: 'node', dependsOn: 'skip-parent' },
+      ],
+      target: 'adapter-target', gate: [], concurrency: 1, tokenBudget: 1000,
+      reporter: (event) => auxiliaryCampaignEvents.push(event),
+      runUnit: async ({ runId }) => runId === 'skip-parent'
+        ? { ...success(runId), outcome: 'gate-failed', gateStatus: 'failed' }
+        : success(runId),
+    });
+
+    await runCampaign({
+      campaignId: 'conformance-budget',
+      tasks: [
+        { task: 'over budget', unitId: 'budget-first', unitKind: 'node' },
+        { task: 'must not dispatch', unitId: 'budget-second', unitKind: 'node' },
+      ],
+      target: 'adapter-target', gate: [], concurrency: 1, tokenBudget: 1,
+      reporter: (event) => auxiliaryCampaignEvents.push(event),
+      runUnit: async ({ runId }) => success(runId, { inputTokens: 2 }),
+    });
+
+    const journalFacts = result.units[0].facts;
+    generatedNote = generateRunJournal(join(journalFacts.dir, 'ccc-runfacts.json'), {
+      reporter: (event) => journalEvents.push(event),
+    }).notePath;
+
+    const deliberatelyUncovered = Object.freeze({
+      // A real isolation stall requires withholding Git completion past the watchdog threshold.
+      'isolate/stalled': 'Covered by the watchdog fault-injection suite, not this healthy run.',
+      // A merge stall requires a deliberately hung Git merge operation.
+      'merge/stalled': 'Covered by the generic watchdog contract; no merge process is hung here.',
+      // The healthy executor emits progress, so silence is tested in executor-watchdog.test.js.
+      'executor/stalled': 'Requires deliberate executor silence longer than the threshold.',
+      // Hanging a gate command changes this conformance run into a timeout scenario.
+      'gate/stalled': 'Requires a deliberately hung gate process.',
+      // Diff production uses Git and is not deliberately hung in this healthy run.
+      'diff/stalled': 'Requires a deliberately hung diff process.',
+      // Both verifier passes complete; their stall path has separate supervision coverage.
+      'verify/stalled': 'Requires a deliberately silent verifier process.',
+      // Report writes are synchronous, so the event loop cannot observe a mid-write timer gap.
+      'report/stalled': 'Unreachable during synchronous report writes.',
+    });
+    assert.equal(Object.keys(deliberatelyUncovered).length, 7,
+      'the deliberately-uncovered ratchet must not grow without an explicit test change');
+    assert.ok(Object.values(deliberatelyUncovered).every((reason) => reason.length >= 24),
+      'every allowlisted pair must carry a substantive reason');
+
+    const allEvents = [
+      ...campaignEvents,
+      ...unitEvents,
+      ...auxiliaryCampaignEvents,
+      ...journalEvents,
     ];
-    assert.doesNotThrow(() => assertEventConformance(events, {
-      allowUnemitted: UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN,
+    assert.doesNotThrow(() => assertEventConformance(allEvents, {
+      allowUnemitted: Object.keys(deliberatelyUncovered),
     }));
+
+    const emittedCampaignPairs = new Set([
+      ...campaignEvents,
+      ...auxiliaryCampaignEvents,
+    ].map((event) => `${event.stage}/${event.type}`));
+    assert.deepEqual([...emittedCampaignPairs].sort(), [...CAMPAIGN_EVENT_PAIRS].sort(),
+      'campaign lifecycle, planner, merge, and round vocabulary must have exact coverage');
 
     // Demonstrate the ratchet firing: this temporary declaration has no emitter in the
     // exercised campaign, so equality must reject it as missing.
-    assert.throws(() => assertEventConformance(events, {
-      declaredStages: [...EVENT_STAGES, 'planner'],
-      declaredPairs: [...EVENT_PAIRS, 'planner/start'],
-      allowUnemitted: UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN,
-    }), /missing:.*planner\/start/);
+    assert.throws(() => assertEventConformance(allEvents, {
+      declaredStages: [...EVENT_STAGES, 'future-stage'],
+      declaredPairs: [...EVENT_PAIRS, 'future-stage/start'],
+      allowUnemitted: Object.keys(deliberatelyUncovered),
+    }), /missing:.*future-stage\/start/);
   } finally {
+    if (generatedNote) rmSync(generatedNote, { force: true });
     rmSync(tgt, { recursive: true, force: true });
     rmSync(scr, { recursive: true, force: true });
   }
