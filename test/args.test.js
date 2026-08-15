@@ -130,6 +130,21 @@ test('batch parses explicit unit ids and tree dependency edges', () => {
   ]);
 });
 
+test('repeated dependency edges make the child a merge unit', () => {
+  const parsed = parseArgs([
+    'batch',
+    '--task', 'left plan', '--unit-id', 'left',
+    '--task', 'right plan', '--unit-id', 'right',
+    '--task', 'join plan', '--unit-id', 'join',
+    '--depends-on', 'join=right',
+    '--depends-on', 'join=left',
+    '--target', 't', '--gate', 'g', '--unit-kind', 'node',
+  ]);
+  assert.deepEqual(parsed.tasks[2], {
+    task: 'join plan', unitKind: 'merge', unitId: 'join', dependsOn: ['right', 'left'],
+  });
+});
+
 test('batch dependency flags reject ambiguous or malformed edge declarations', () => {
   assert.throws(() => parseArgs([
     'batch', '--task', 'a', '--task', 'b', '--unit-id', 'a',

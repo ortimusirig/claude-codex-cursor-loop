@@ -1,7 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { exitCodeFor } from './exit.js';
 import { identifyEvent, reportEvent, UNIT_KINDS } from './events.js';
-import { commitCampaignResult, prepareCampaignBase } from './isolation.js';
+import { runGate as realGate } from './gate.js';
+import {
+  commitCampaignResult,
+  prepareCampaignBase,
+  withDetachedWorktree,
+} from './isolation.js';
+import { deriveMergeContext, withObservedTestCounts } from './merge.js';
 import { run as realRun } from './run.js';
+import { resolveStageTimeouts } from './timeouts.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
 
 export const DEFAULT_CONCURRENCY = 2;
@@ -33,14 +42,14 @@ function declaredParents(raw, unitId) {
     if (Array.isArray(raw[field])) parents.push(...raw[field]);
     else parents.push(raw[field]);
   }
-  if (parents.length > 1) {
-    throw new Error(
-      `campaign unit "${unitId}" declares more than one parent (${parents.map(String).join(', ')}); `
-      + 'fan-in is not supported',
-    );
+  for (const parent of parents) {
+    if (typeof parent !== 'string' || parent === '') {
+      throw new TypeError(`campaign unit "${unitId}" dependency must name a non-empty unitId`);
+    }
   }
-  if (parents.length === 1 && (typeof parents[0] !== 'string' || parents[0] === '')) {
-    throw new TypeError(`campaign unit "${unitId}" dependency must name a non-empty unitId`);
+  const duplicate = parents.find((parent, index) => parents.indexOf(parent) !== index);
+  if (duplicate !== undefined) {
+    throw new Error(`campaign unit "${unitId}" declares duplicate parent "${duplicate}"`);
   }
   return parents;
 }
@@ -48,15 +57,23 @@ function declaredParents(raw, unitId) {
 function validateDependencyGraph(units) {
   const byId = new Map(units.map((unit) => [unit.unitId, unit]));
   for (const unit of units) {
-    if (unit.dependsOn === undefined) continue;
-    if (unit.dependsOn === unit.unitId) {
-      throw new Error(`campaign unit "${unit.unitId}" cannot depend on itself`);
+    for (const parent of unit.parents) {
+      if (parent === unit.unitId) {
+        throw new Error(`campaign unit "${unit.unitId}" cannot depend on itself`);
+      }
+      if (!byId.has(parent)) {
+        throw new Error(
+          `campaign unit "${unit.unitId}" depends on unknown unit "${parent}"`,
+        );
+      }
     }
-    if (!byId.has(unit.dependsOn)) {
-      throw new Error(
-        `campaign unit "${unit.unitId}" depends on unknown unit "${unit.dependsOn}"`,
-      );
-    }
+    // Graph declaration order, not completion timing or caller array order, defines every
+    // fan-in. That makes the primary merge parent and all subsequent merges reproducible.
+    unit.parents.sort((a, b) => byId.get(a).index - byId.get(b).index);
+    unit.dependsOn = unit.parents.length === 0
+      ? undefined
+      : unit.parents.length === 1 ? unit.parents[0] : [...unit.parents];
+    if (unit.parents.length > 1) unit.unitKind = 'merge';
   }
 
   const state = new Map();
@@ -64,17 +81,17 @@ function validateDependencyGraph(units) {
   const visit = (unit) => {
     state.set(unit.unitId, 1);
     stack.push(unit.unitId);
-    if (unit.dependsOn !== undefined) {
-      const parentState = state.get(unit.dependsOn) ?? 0;
+    for (const parent of unit.parents) {
+      const parentState = state.get(parent) ?? 0;
       if (parentState === 1) {
-        const start = stack.indexOf(unit.dependsOn);
-        const cycle = [...stack.slice(start), unit.dependsOn];
+        const start = stack.indexOf(parent);
+        const cycle = [...stack.slice(start), parent];
         throw new Error(
           `campaign dependency cycle involving units ${cycle.slice(0, -1).join(', ')}: `
           + cycle.join(' -> '),
         );
       }
-      if (parentState === 0) visit(byId.get(unit.dependsOn));
+      if (parentState === 0) visit(byId.get(parent));
     }
     stack.pop();
     state.set(unit.unitId, 2);
@@ -116,8 +133,7 @@ function normalizeUnits(tasks, unitKind, campaignId) {
       : undefined;
     const parents = declaredParents(raw, unitId);
     return {
-      index, task, unitKind: kind, unitId, baseRef, branch,
-      ...(parents.length === 0 ? {} : { dependsOn: parents[0] }),
+      index, task, unitKind: kind, unitId, baseRef, branch, parents,
     };
   });
   validateDependencyGraph(units);
@@ -166,24 +182,51 @@ export async function runCampaign({
   const indexById = new Map(units.map((unit) => [unit.unitId, unit.index]));
   const children = units.map(() => []);
   for (const unit of units) {
-    if (unit.dependsOn !== undefined) children[indexById.get(unit.dependsOn)].push(unit.index);
+    for (const parent of unit.parents) children[indexById.get(parent)].push(unit.index);
   }
   const campaignBase = runOptions.campaignBase ?? (runUnit === realRun
     ? await prepareCampaignBase({ target, campaignId, scratchRoot })
     : undefined);
-  const entries = units.map(({ index, unitId, unitKind: kind, dependsOn }) => ({
+  const hasMerge = units.some((unit) => unit.parents.length > 1);
+  const gateCommands = runUnit === realRun && hasMerge
+    ? (Array.isArray(gate) ? gate : JSON.parse(readFileSync(gate, 'utf8')))
+    : null;
+  const baselineTestCounts = new Map();
+  const measureBaselineTests = (commit, unit) => {
+    if (baselineTestCounts.has(commit)) return baselineTestCounts.get(commit);
+    const measurement = withDetachedWorktree({
+      repository: campaignBase.repository,
+      commit,
+      dir: join(scratchRoot, campaignId, `.test-count-${unit.index}`),
+      action: async (cwd) => {
+        const gateRunner = runOptions.adapters?.runGate ?? realGate;
+        const result = await gateRunner({
+          commands: gateCommands,
+          cwd,
+          timeoutMs: resolveStageTimeouts().gate,
+          runId: `${unit.unitId}-baseline-count`,
+          attempt: 0,
+          captureTestCount: true,
+        });
+        return Number.isSafeInteger(result?.testCount) ? result.testCount : null;
+      },
+    }).catch(() => null);
+    baselineTestCounts.set(commit, measurement);
+    return measurement;
+  };
+  const entries = units.map(({ index, unitId, unitKind: kind, dependsOn, parents }) => ({
     index,
     unitId,
     unitKind: kind,
     round,
-    status: dependsOn === undefined ? 'pending' : 'waiting',
+    status: parents.length === 0 ? 'pending' : 'waiting',
     facts: null,
-    ...(dependsOn === undefined ? {} : { dependsOn }),
+    ...(parents.length === 0 ? {} : { dependsOn }),
   }));
   let aggregateUsage = EMPTY_USAGE;
   let consumedTokens = 0;
-  const ready = units.filter((unit) => unit.dependsOn === undefined).map((unit) => unit.index);
-  const inheritedBaseRefs = new Map();
+  const ready = units.filter((unit) => unit.parents.length === 0).map((unit) => unit.index);
+  const inheritedTopologies = new Map();
   let inFlight = 0;
   let concluded = 0;
   let budgetExceeded = false;
@@ -201,10 +244,12 @@ export async function runCampaign({
   });
   lifecycle(campaignId, 'round', 'start', { unitCount: units.length });
   for (const unit of units) {
-    if (unit.dependsOn === undefined) continue;
+    if (unit.parents.length === 0) continue;
     lifecycle(unit.unitId, 'unit', 'waiting', {
       index: unit.index,
-      predecessorUnitId: unit.dependsOn,
+      ...(unit.parents.length === 1
+        ? { predecessorUnitId: unit.parents[0] }
+        : { predecessorUnitIds: [...unit.parents] }),
     }, { campaignId, round, unitId: unit.unitId, unitKind: unit.unitKind });
   }
 
@@ -274,22 +319,41 @@ export async function runCampaign({
         return;
       }
 
-      const resultBranch = parentEntry.facts?.branch
-        ?? parentUnit.branch
-        ?? `ccc/${parentUnit.unitId}`;
       // A no-op is successful: its branch still names the same commit as its own base, so
       // descendants proceed from that branch instead of being confused with skipped work.
       for (const childIndex of children[parentIndex]) {
         const child = units[childIndex];
         const childEntry = entries[childIndex];
         if (childEntry.status !== 'waiting') continue;
+        const parentEntries = child.parents.map((parentId) => entries[indexById.get(parentId)]);
+        if (!parentEntries.every((entry) => entry.status === 'completed'
+          && exitCodeFor(entry.facts?.outcome) === 0)) continue;
+        const parentTopology = child.parents.map((parentId) => {
+          const declared = units[indexById.get(parentId)];
+          const settled = entries[declared.index];
+          return {
+            unitId: parentId,
+            branch: settled.facts?.branch ?? declared.branch ?? `ccc/${parentId}`,
+            commit: settled.resultCommit ?? settled.facts?.baseCommit ?? null,
+          };
+        });
         childEntry.status = 'pending';
-        inheritedBaseRefs.set(childIndex, resultBranch);
+        inheritedTopologies.set(childIndex, {
+          baseRef: parentTopology[0].branch,
+          parents: parentTopology,
+        });
         lifecycle(child.unitId, 'unit', 'released', {
           index: child.index,
-          predecessorUnitId: parentUnit.unitId,
-          predecessorOutcome: parentEntry.facts?.outcome,
-          baseRef: resultBranch,
+          ...(child.parents.length === 1
+            ? {
+                predecessorUnitId: child.parents[0],
+                predecessorOutcome: parentEntries[0].facts?.outcome,
+              }
+            : {
+                predecessorUnitIds: [...child.parents],
+                predecessorOutcomes: parentEntries.map((entry) => entry.facts?.outcome),
+              }),
+          baseRef: parentTopology[0].branch,
         }, { campaignId, round, unitId: child.unitId, unitKind: child.unitKind });
         ready.push(childIndex);
       }
@@ -312,23 +376,56 @@ export async function runCampaign({
         };
         lifecycle(unit.unitId, 'unit', 'start', { index: unit.index }, identity);
         const unitReporter = reporterForUnit(unitReporterFactory, unit, identity);
-        const topology = unit.dependsOn === undefined
+        const topology = unit.parents.length === 0
           ? (unit.baseRef === undefined ? {} : { baseRef: unit.baseRef })
-          : { baseRef: inheritedBaseRefs.get(unitIndex) };
+          : inheritedTopologies.get(unitIndex);
 
-        Promise.resolve().then(() => runUnit({
-          ...runOptions,
-          task: unit.task,
-          target,
-          gate,
-          campaignId,
-          scratchRoot,
-          runId: unit.unitId,
-          ...(campaignBase ? { campaignBase } : {}),
-          ...topology,
-          ...(unit.branch === undefined ? {} : { branch: unit.branch }),
-          ...(unitReporter ? { reporter: unitReporter } : {}),
-        })).then(async (facts) => {
+        Promise.resolve().then(async () => {
+          let runTopology = topology;
+          if (unit.parents.length > 1) {
+            let merge = runUnit === realRun
+              ? await deriveMergeContext({
+                  repository: campaignBase.repository,
+                  parents: topology.parents,
+                })
+              : {
+                  parents: topology.parents.map((parent) => ({ ...parent })),
+                  parentOrder: topology.parents.map((parent) => parent.unitId),
+                  mergeBase: null,
+                  testCounts: null,
+                };
+            if (runUnit === realRun) {
+              const observedParents = unit.parents.map((parentId) => {
+                const facts = entries[indexById.get(parentId)].facts;
+                return facts?.iterations?.at(-1)?.gate?.testCount ?? null;
+              });
+              if (observedParents.every((count) => Number.isSafeInteger(count) && count >= 0)) {
+                const baseline = await measureBaselineTests(merge.mergeBase, unit);
+                merge = withObservedTestCounts(merge, {
+                  baseline,
+                  parents: observedParents,
+                });
+              }
+            }
+            runTopology = { baseRef: topology.baseRef, unitKind: 'merge', merge };
+          } else if (unit.parents.length === 1) {
+            runTopology = { baseRef: topology.baseRef };
+          }
+          return runUnit({
+            ...runOptions,
+            task: unit.task,
+            target,
+            gate,
+            campaignId,
+            scratchRoot,
+            runId: unit.unitId,
+            ...(campaignBase ? { campaignBase } : {}),
+            ...runTopology,
+            ...(runUnit === realRun && hasMerge ? { captureTestCount: true } : {}),
+            ...(unit.branch === undefined ? {} : { branch: unit.branch }),
+            ...(unitReporter ? { reporter: unitReporter } : {}),
+          });
+        }).then(async (facts) => {
           entry.facts = facts;
           aggregateUsage = addUsage(aggregateUsage, facts?.tokens?.total);
           consumedTokens = countUsageTokens(aggregateUsage);

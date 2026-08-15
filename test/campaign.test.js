@@ -379,13 +379,12 @@ test('every invalid graph is rejected before any executor launches', async () =>
       pattern: /self-unit.*depend on itself/i,
     },
     {
-      name: 'fan-in',
+      name: 'duplicate parent',
       tasks: [
-        { task: 'a', unitId: 'fanin-a' },
-        { task: 'b', unitId: 'fanin-b' },
-        { task: 'child', unitId: 'fanin-child', dependsOn: ['fanin-a', 'fanin-b'] },
+        { task: 'a', unitId: 'duplicate-a' },
+        { task: 'child', unitId: 'duplicate-child', dependsOn: ['duplicate-a', 'duplicate-a'] },
       ],
-      pattern: /fanin-child.*more than one parent.*fanin-a.*fanin-b.*fan-in/i,
+      pattern: /duplicate-child.*duplicate parent.*duplicate-a/i,
     },
     {
       name: 'cycle',

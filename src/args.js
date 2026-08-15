@@ -169,7 +169,10 @@ export function parseArgs(argv) {
     };
     const parents = parentsByChild.get(unit.unitId) ?? [];
     if (parents.length === 1) unit.dependsOn = parents[0];
-    else if (parents.length > 1) unit.dependsOn = parents;
+    else if (parents.length > 1) {
+      unit.dependsOn = parents;
+      unit.unitKind = 'merge';
+    }
     return unit;
   });
   const parsed = {

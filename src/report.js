@@ -31,6 +31,8 @@ export function buildRunFacts({
   timeouts = {},
   timeoutEvents = [],
   supervision = null,
+  unitKind,
+  merge,
 }) {
   const facts = {
     runId, target, dir, isRepo, baseRef, baseCommit, branch,
@@ -64,6 +66,8 @@ export function buildRunFacts({
     },
     outcome,
   };
+  if (unitKind !== undefined) facts.unitKind = unitKind;
+  if (merge !== undefined) facts.merge = merge;
   if (supervision !== null) {
     facts.limits.stall = {
       thresholdMs: supervision.thresholdMs,
@@ -128,6 +132,13 @@ export function buildReportMarkdown(facts, {
     `- **Base commit:** ${facts.baseCommit}`,
     `- **Branch:** ${facts.branch}`,
     `- **Iterations:** ${facts.iterations.length}`,
+    ...(facts.unitKind === 'merge'
+      ? [
+          `- **Unit kind:** merge`,
+          `- **Parent order:** ${(facts.merge?.parentOrder ?? []).join(' -> ')}`,
+          `- **Merge base:** ${facts.merge?.mergeBase ?? 'n/a'}`,
+        ]
+      : []),
     ...(configuredTimeouts && Object.values(configuredTimeouts).some((value) => value !== null)
       ? [`- **Timeouts (ms):** executor ${configuredTimeouts.executor}; verifier ${configuredTimeouts.verifier}; gate ${configuredTimeouts.gate}`]
       : []),
@@ -168,6 +179,9 @@ export function buildReportMarkdown(facts, {
     md.push(
       ``,
       `## Gate failure`,
+      ...(facts.gateFailure.harness
+        ? [`- **Harness check:** ${facts.gateFailure.harness}`]
+        : []),
       `- **Command:** ${command}`,
       `- **Exit code:** ${facts.gateFailure.code}`,
       ...(facts.gateFailure.timedOut
@@ -200,6 +214,29 @@ export function buildReportMarkdown(facts, {
         : 'reported only';
       md.push(`- ${event.stage}: ${event.gapMs} ms gap after ` +
         `${last.stage ?? 'unknown'}/${last.type ?? 'unknown'}; ${action}`);
+    }
+  }
+  if (facts.unitKind === 'merge') {
+    const counts = facts.merge?.testCounts ?? {};
+    md.push(
+      ``,
+      `## Merge test-count floor`,
+      `- **Count source:** ${counts.source ?? 'n/a'}`,
+      `- **Baseline:** ${counts.baseline ?? 'n/a'}`,
+      `- **Parents:** ${(counts.parents ?? [])
+        .map((parent) => `${parent.unitId}=${parent.count}`).join(', ') || '(none)'}`,
+      `- **Required:** ${counts.required ?? 'n/a'}`,
+      `- **Actual:** ${counts.actual ?? 'n/a'}`,
+      ``,
+      `## Merge conflict resolutions`,
+    );
+    if ((facts.merge?.resolutions ?? []).length === 0) {
+      md.push('- (no conflicting paths)');
+    } else {
+      for (const resolution of facts.merge.resolutions) {
+        md.push(`- **${resolution.path}** (${resolution.parentUnitId}): `
+          + `${resolution.chosen} — ${resolution.reason}`);
+      }
     }
   }
   md.push(

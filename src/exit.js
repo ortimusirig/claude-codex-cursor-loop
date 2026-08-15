@@ -12,6 +12,7 @@ export const EXIT_BY_OUTCOME = {
   'timed-out': 5,
   'campaign-failed': 6,
   'budget-exhausted': 7,
+  'conflicting-intent': 8,
 };
 
 // An unrecognised outcome is not a success. Defaulting to 0 here would recreate

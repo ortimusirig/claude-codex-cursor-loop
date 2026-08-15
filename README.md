@@ -88,20 +88,31 @@ worktree, gate, two read-only verifier passes, run facts, and `events.jsonl`.
 | `--token-budget` | 12,500,000 | positive campaign-wide token count |
 | `--unit-kind` | `candidate` | `candidate`, `node`, or `merge`; give once for every task or once per `--task` |
 | `--unit-id` | generated | stable unit ID; when used, give once per `--task` |
-| `--depends-on` | none | `CHILD=PARENT`; repeat for edges, with at most one parent per child |
+| `--depends-on` | none | `CHILD=PARENT`; repeat for edges and repeat the same child for fan-in |
 
 The budget counts input plus output tokens. Cached input and reasoning output are already
 subsets of those values and are not counted twice. Dispatch stops after completed run facts
 push the campaign over budget; units already in flight are allowed to finish.
 
-Dependencies are a declared tree topology: roots fan out up to the concurrency limit, while a
+Dependencies are a declared DAG topology: roots fan out up to the concurrency limit, while a
 dependent waits without occupying a slot. After a successful predecessor finishes, its staged
 result is committed on that unit's result branch and the dependent isolates from that branch.
 `no-op` is also successful and releases dependents; its result branch simply still names its
 base commit. A `gate-failed`, `timed-out`, or `verifier-failed` predecessor does not release
 broken work: its dependents are marked `skipped`, and that skip cascades transitively. Unrelated
-roots continue normally. Unknown parents, self-dependencies, cycles, and multiple parents
-(fan-in) are rejected before any executor launches. Fan-in and merging are not supported yet.
+roots continue normally. Unknown parents, self-dependencies, duplicate edges, and cycles are
+rejected before any executor launches.
+
+Giving one child several parents makes it a merge unit. Parent order is canonicalized by graph
+declaration order; the merge starts from the first parent's result branch and brings every other
+parent into the merge unit's own worktree. A clean merge continues through the normal executor,
+gate, diff, and two verifier passes. A text conflict is handed to the executor with every
+conflicting path named in `TASK.md`; each resolution and its reason must be recorded in
+`ccc-merge-resolutions.json`, then reaches both run facts and the report. Genuine intent conflicts stop
+as `conflicting-intent` for human direction. Merge gates add a derived test-count floor of the sum
+of parent counts minus their shared baseline counts, and the merge intent requires a new
+interaction/seam test. Counts come from recognized test-runner summaries emitted by the gate;
+when a gate emits no count, the deterministic fallback counts tracked test files in each Git tree.
 
 `gate.json` is a JSON array of commands; **pass/fail is by exit code only**:
 
@@ -127,6 +138,7 @@ error; multi-word inline prose is used verbatim.
 | `timed-out` | the final executor, gate, or verifier stage exceeded its deadline | 5 |
 | `campaign-failed` | at least one dispatched batch unit failed | 6 |
 | `budget-exhausted` | a batch exceeded its token budget | 7 |
+| `conflicting-intent` | a merge found incompatible parent intents and needs human direction | 8 |
 | — | preflight or argument failure | 2 |
 | — | unexpected fatal error, or an unrecognised outcome | 3 |
 

@@ -32,3 +32,8 @@ test('campaign failure and budget exhaustion are explicit non-zero outcomes', ()
   assert.equal(exitCodeFor('campaign-failed'), 6);
   assert.equal(exitCodeFor('budget-exhausted'), 7);
 });
+
+test('conflicting intent has its own non-zero exit distinct from gate failure', () => {
+  assert.equal(exitCodeFor('conflicting-intent'), 8);
+  assert.notEqual(exitCodeFor('conflicting-intent'), exitCodeFor('gate-failed'));
+});

@@ -286,10 +286,16 @@ function detailFor(event) {
       return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} not-dispatched reason=${oneLine(event.reason)}`;
     }
     if (event.type === 'waiting') {
-      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} waiting on predecessor=${oneLine(event.predecessorUnitId)}`;
+      const predecessors = Array.isArray(event.predecessorUnitIds)
+        ? event.predecessorUnitIds.join(',')
+        : event.predecessorUnitId;
+      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} waiting on predecessor=${oneLine(predecessors)}`;
     }
     if (event.type === 'released') {
-      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} released by predecessor=${oneLine(event.predecessorUnitId)}`
+      const predecessors = Array.isArray(event.predecessorUnitIds)
+        ? event.predecessorUnitIds.join(',')
+        : event.predecessorUnitId;
+      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} released by predecessor=${oneLine(predecessors)}`
         + ` base=${oneLine(event.baseRef)}`;
     }
     if (event.type === 'skipped') {

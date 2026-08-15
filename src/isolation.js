@@ -184,6 +184,30 @@ async function addWorktree({ repositoryInfoValue, dir, branch, baseRef }) {
   });
 }
 
+export async function withDetachedWorktree({ repository, commit, dir, action }) {
+  if (typeof action !== 'function') throw new TypeError('detached worktree action must be a function');
+  const info = await repositoryInfo(repository);
+  if (!info) throw new Error(`campaign base is not a git repository: ${repository}`);
+  await withRepositoryLock(info.lockKey, async () => {
+    const resolvedCommit = await resolveBaseCommit(repository, commit);
+    const result = await spawnCapture('git', [
+      '-C', repository, 'worktree', 'add', '--detach', dir, resolvedCommit,
+    ]);
+    if (result.code !== 0) {
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+      await spawnCapture('git', [
+        '-C', repository, 'worktree', 'prune', '--expire', 'now',
+      ]).catch(() => null);
+      throw new Error(`git detached worktree add failed for ${commit}: ${result.stderr.trim()}`);
+    }
+  });
+  try {
+    return await action(dir);
+  } finally {
+    await cleanupWorktree(info, dir);
+  }
+}
+
 export async function prepareCampaignBase({ target, campaignId, scratchRoot }) {
   if (typeof campaignId !== 'string' || campaignId === '') {
     throw new TypeError('campaignId must be a non-empty string');

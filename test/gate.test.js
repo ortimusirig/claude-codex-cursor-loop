@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GATE_TAIL_LIMIT, runGate } from '../src/gate.js';
+import { testCountFloorCommand, TEST_COUNT_FLOOR_BIN } from '../src/merge.js';
 
 const ok = { bin: process.execPath, args: ['-e', 'process.exit(0)'] };
 const bad = { bin: process.execPath, args: ['-e', 'process.exit(1)'] };
@@ -60,6 +64,27 @@ test('failing output retention keeps stream endings rather than their heads', as
 test('an empty command list passes vacuously', async () => {
   const r = await runGate({ commands: [], cwd: process.cwd() });
   assert.equal(r.passed, true);
+});
+
+test('a derived test-count floor is enforced by its own exit code', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'gate-count-'));
+  const reportsSeven = {
+    bin: process.execPath,
+    args: ['-e', "process.stdout.write('ℹ tests 7\\n')"],
+  };
+  try {
+    const r = await runGate({
+      commands: [reportsSeven, testCountFloorCommand(8)],
+      cwd,
+    });
+    assert.equal(r.testCount, 7);
+    assert.equal(r.passed, false);
+    assert.equal(r.results[1].harness, TEST_COUNT_FLOOR_BIN);
+    assert.equal(r.results[1].code, 1);
+    assert.match(r.results[1].outputTail, /actual=7 required=8/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test('a timed-out gate command fails with an explicit timeout marker', async () => {

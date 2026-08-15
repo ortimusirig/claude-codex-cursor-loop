@@ -20,21 +20,24 @@ import { resolveTask } from './task.js';
 import { resolveStageTimeouts } from './timeouts.js';
 import { reportEvent } from './events.js';
 import { createGapWatchdog, resolveStallConfig } from './stall-watchdog.js';
+import { HARNESS_ARTIFACTS } from './artifacts.js';
+import {
+  advanceMerge,
+  buildMergeTask,
+  clearMergeLedger,
+  concludeConflict,
+  readMergeLedger,
+  testCountFloorCommand,
+} from './merge.js';
+import { countTestFiles } from './merge-test-count.js';
+
+export { HARNESS_ARTIFACTS } from './artifacts.js';
 
 // Files the harness itself writes into the isolated directory. They must never enter
 // CHANGES.diff (an artifact in the diff would make the `no-op` outcome unreachable) and
 // must never be treated as shippable by the installer's payload check. Both consumers
 // read this one list so a new artifact cannot be added to one and forgotten in the other.
-export const HARNESS_ARTIFACTS = Object.freeze([
-  'TASK.md',
-  'CHANGES.diff',
-  'ccc-report.md',
-  'ccc-runfacts.json',
-  'events.jsonl',
-  'campaign-events.jsonl',
-]);
-
-export async function diffText(dir) {
+export async function diffText(dir, baseRef = 'HEAD') {
   // Stage first so NEW (untracked) files appear — `git diff HEAD` alone omits them.
   // Harness artifacts live in the worktree so the agents can read them, but must not
   // become part of the proposed change. A pathspec keeps linked worktrees isolated;
@@ -44,7 +47,7 @@ export async function diffText(dir) {
     ...HARNESS_ARTIFACTS.map((name) => `:(exclude)${name}`),
   ]);
   if (add.code !== 0) throw new Error(`git add failed in ${dir}: ${add.stderr.trim()}`);
-  const r = await spawnCapture('git', ['-C', dir, 'diff', '--cached', 'HEAD']);
+  const r = await spawnCapture('git', ['-C', dir, 'diff', '--cached', baseRef]);
   if (r.code !== 0) throw new Error(`git diff failed in ${dir}: ${r.stderr.trim()}`);
   return r.stdout;
 }
@@ -86,7 +89,8 @@ export function planWithStallNotice(plan, stall) {
 export async function run(opts) {
   const {
     task, target, gate, gateRetries, scratchRoot, runId,
-    baseRef = 'HEAD', branch, branchName, campaignId, campaignBase,
+    baseRef = 'HEAD', branch, branchName, campaignId, campaignBase, unitKind, merge,
+    captureTestCount = false,
     executorModel = DEFAULT_EXECUTOR_MODEL,
     executorEffort = DEFAULT_EXECUTOR_EFFORT,
     verifierModel = DEFAULT_VERIFIER_MODEL,
@@ -95,7 +99,8 @@ export async function run(opts) {
   const runExecutor = adapters.runExecutor ?? realExecutor;
   const runGate = adapters.runGate ?? realGate;
   const runVerifier = adapters.runVerifier ?? realVerifier;
-  const plan = resolveTask(task);
+  const originalPlan = resolveTask(task);
+  let plan = originalPlan;
   const commands = Array.isArray(gate) ? gate : JSON.parse(readFileSync(gate, 'utf8'));
   const stageTimeouts = resolveStageTimeouts();
 
@@ -156,6 +161,27 @@ export async function run(opts) {
     campaignId,
     campaignBase,
   });
+  const mergeConflicts = [];
+  const mergeResolutions = [];
+  let mergeProgress = null;
+  let activeConflict = null;
+  if (merge !== undefined) {
+    if (unitKind !== 'merge') throw new Error('merge context requires unitKind "merge"');
+    if (!Array.isArray(merge.parents) || merge.parents.length < 2) {
+      throw new Error('merge unit requires at least two ordered parents');
+    }
+    if (!merge.testCounts || !Number.isSafeInteger(merge.testCounts.required)) {
+      throw new Error('merge unit requires derived test counts');
+    }
+    mergeProgress = await advanceMerge({
+      cwd: iso.dir,
+      parents: merge.parents,
+      unitId: runId,
+    });
+    activeConflict = mergeProgress.conflict;
+    if (activeConflict) mergeConflicts.push(activeConflict);
+    plan = buildMergeTask(originalPlan, merge, activeConflict);
+  }
   writeFileSync(join(iso.dir, 'TASK.md'), plan);
   const iterations = [];
   let gateStatus = 'failed';
@@ -226,19 +252,72 @@ export async function run(opts) {
     }
   };
 
-  let exec = await executePlan(plan);
+  let exec;
+  let conflictingIntent = false;
+  let mergePreparationFailure = null;
+  while (true) {
+    exec = await executePlan(plan);
+    if (exec.timedOut || !activeConflict) break;
+
+    const ledger = readMergeLedger({ cwd: iso.dir, conflict: activeConflict, executorResult: exec });
+    if (!ledger.ok) {
+      mergePreparationFailure = ledger.reason;
+      break;
+    }
+    mergeResolutions.push(...ledger.resolutions);
+    if (ledger.status === 'conflicting-intent') {
+      conflictingIntent = true;
+      break;
+    }
+    const concludedConflict = await concludeConflict({
+      cwd: iso.dir,
+      conflict: activeConflict,
+      unitId: runId,
+    });
+    if (!concludedConflict.ok) {
+      mergePreparationFailure = concludedConflict.reason;
+      break;
+    }
+    clearMergeLedger(iso.dir);
+    mergeProgress = await advanceMerge({
+      cwd: iso.dir,
+      parents: merge.parents,
+      nextParentIndex: mergeProgress.nextParentIndex + 1,
+      unitId: runId,
+    });
+    activeConflict = mergeProgress.conflict;
+    if (!activeConflict) break;
+    mergeConflicts.push(activeConflict);
+    plan = buildMergeTask(originalPlan, merge, activeConflict);
+    writeFileSync(join(iso.dir, 'TASK.md'), plan);
+  }
   let retries = 0;
   let executorTimedOut = Boolean(exec.timedOut);
   // Gate retries rerun the executor within this single controller-driven pass.
   let gateResult = null;
-  if (!executorTimedOut) {
+  const mergeGateCommands = merge === undefined
+    ? commands
+    : [...commands, testCountFloorCommand(merge.testCounts.required)];
+  if (!executorTimedOut && !conflictingIntent && mergePreparationFailure === null) {
     gateResult = await runGate({
-      commands, cwd: iso.dir, timeoutMs: stageTimeouts.gate,
+      commands: mergeGateCommands, cwd: iso.dir, timeoutMs: stageTimeouts.gate,
       reporter: eventReporter, runId, attempt: 1,
+      captureTestCount,
     });
     recordGateTimeout(gateResult, n, 1);
+  } else if (!executorTimedOut && mergePreparationFailure !== null) {
+    gateResult = {
+      passed: false,
+      results: [{
+        bin: 'ccc-merge-ledger',
+        args: [],
+        code: 1,
+        outputTail: mergePreparationFailure,
+      }],
+    };
   }
-  while (!executorTimedOut && !gateResult.passed && retries < gateRetries) {
+  while (!executorTimedOut && !conflictingIntent && mergePreparationFailure === null
+    && !gateResult.passed && retries < gateRetries) {
     retries++;
     gateRetryCount++;
     const retryPlan = planWithGateFailure(plan, gateResult);
@@ -253,8 +332,9 @@ export async function run(opts) {
     executorTimedOut = Boolean(exec.timedOut);
     if (!executorTimedOut) {
       gateResult = await runGate({
-        commands, cwd: iso.dir, timeoutMs: stageTimeouts.gate,
+        commands: mergeGateCommands, cwd: iso.dir, timeoutMs: stageTimeouts.gate,
         reporter: eventReporter, runId, attempt: retries + 1,
+        captureTestCount,
       });
       recordGateTimeout(gateResult, n, retries + 1);
     }
@@ -272,6 +352,10 @@ export async function run(opts) {
     gateStatus = gateResult ? 'failed' : 'not-run';
     outcome = 'timed-out';
     iterations.push(iter);
+  } else if (conflictingIntent) {
+    gateStatus = 'not-run';
+    outcome = 'conflicting-intent';
+    iterations.push(iter);
   } else if (!gateResult.passed) {
     gateStatus = 'failed';
     const failed = gateResult.results.find((result) => result.code !== 0);
@@ -280,6 +364,7 @@ export async function run(opts) {
       gateFailure = {
         bin: failed.bin,
         args: failed.args,
+        ...(failed.harness === undefined ? {} : { harness: failed.harness }),
         code: failed.code,
         ...(failed.timedOut ? { timedOut: true, timeoutMs: failed.timeoutMs } : {}),
         outputTail: failed.outputTail,
@@ -289,7 +374,7 @@ export async function run(opts) {
   } else {
     gateStatus = 'passed';
     reportEvent(eventReporter, runId, 'diff', 'start');
-    const diff = await diffText(iso.dir);
+    const diff = await diffText(iso.dir, merge === undefined ? 'HEAD' : merge.mergeBase);
     if (diff.trim() === '') {
       reportEvent(eventReporter, runId, 'diff', 'finish', { verdict: 'empty' });
       outcome = 'no-op';
@@ -347,6 +432,24 @@ export async function run(opts) {
     verifier: verifierUsage,
     total: addUsage(executorUsage, verifierUsage),
   };
+  const mergeFacts = merge === undefined ? null : {
+    parentOrder: [...merge.parentOrder],
+    parents: merge.parents.map((parent) => ({ ...parent })),
+    mergeBase: merge.mergeBase,
+    conflicts: mergeConflicts.map((conflict) => ({
+      parentUnitId: conflict.parentUnitId,
+      parentCommit: conflict.parentCommit,
+      paths: [...conflict.paths],
+    })),
+    resolutions: mergeResolutions.map((resolution) => ({ ...resolution })),
+    testCounts: {
+      ...merge.testCounts,
+      parents: merge.testCounts.parents.map((parent) => ({ ...parent })),
+      actual: Number.isSafeInteger(gateResult?.testCount)
+        ? gateResult.testCount
+        : merge.testCounts.source === 'gate-output' ? null : countTestFiles(iso.dir),
+    },
+  };
   const facts = buildRunFacts({ runId, target, dir: iso.dir, isRepo: iso.isRepo,
     baseRef: iso.baseRef, baseCommit: iso.baseCommit, branch: iso.branch,
     iterations, gateStatus, verdict, verdictSource, verifierFindings,
@@ -361,6 +464,8 @@ export async function run(opts) {
       gateRetryCount,
       stallEvents: stallRecords,
     } : null,
+    ...(unitKind === undefined ? {} : { unitKind }),
+    ...(mergeFacts === null ? {} : { merge: mergeFacts }),
     models: {
       executor: executorModel,
       executorEffort,
