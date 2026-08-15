@@ -1,5 +1,5 @@
 # NOTE: harness artifacts (TASK.md, CHANGES.diff, ccc-report.md, ccc-runfacts.json,
-# ccc-forge.json, events.jsonl) are deliberately NOT listed here.
+# ccc-github.json, events.jsonl) are deliberately NOT listed here.
 #
 # Isolation uses `git worktree`, so a worktree inherits this file. The loop stages with
 #   git add -A -- . :(exclude)TASK.md :(exclude)events.jsonl ...

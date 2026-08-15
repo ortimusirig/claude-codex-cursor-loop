@@ -232,7 +232,7 @@ test('scratch-root lists the newest run first', async () => {
   }
 });
 
-test("verdictSource none is visibly distinct from a reviewer's genuine ISSUES", async () => {
+test('dashboard shows both labelled reviews, provenance, consistency, rationale, and VS Code command', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-verdict-'));
   const runId = 'run-verdict-source';
   const run = makeRun(root, runId, [
@@ -242,13 +242,45 @@ test("verdictSource none is visibly distinct from a reviewer's genuine ISSUES", 
     event(runId, 'verify', 'finish', {
       pass: 'intent', verdict: 'ISSUES', source: 'assistant', tokens: { outputTokens: 7 },
     }),
+    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
   ]);
+  writeFileSync(join(run.work, 'ccc-runfacts.json'), JSON.stringify({
+    runId,
+    verdict: 'ISSUES',
+    verdictSource: 'none',
+    verifierFindings: 'Correctness output retained without a terminal marker.',
+    verifierConsistency: { status: 'consistent' },
+    intentVerdict: 'ISSUES',
+    intentVerdictSource: 'assistant',
+    intentVerifierFindings: 'Intent review found the requested failure path missing.',
+    intentVerifierConsistency: { status: 'disagreement' },
+    iterations: [{
+      lastMessage: 'Kept the local diff intact so the human can inspect every changed line.',
+      verifier: {
+        verdict: 'ISSUES', verdictSource: 'none',
+        verdictConsistency: { status: 'consistent' },
+      },
+      intentVerifier: {
+        verdict: 'ISSUES', verdictSource: 'assistant',
+        verdictConsistency: { status: 'disagreement' },
+      },
+    }],
+  }));
   let dashboard;
   try {
     dashboard = await startDashboard({ runDirectory: run.directory, port: 0 });
     const html = await page(dashboard);
     assert.match(html, /data-verdict-kind="fail-safe"[\s\S]*verdictSource: none[\s\S]*ISSUES is a fail-safe, not a reviewer finding/);
     assert.match(html, /data-verdict-kind="reviewer"[\s\S]*verdictSource: assistant[\s\S]*Reviewer reported ISSUES/);
+    assert.match(html, /Correctness pass retained output \(not authoritative reviewer findings\)[\s\S]*Correctness output retained without a terminal marker/,
+      'the correctness pass must be labelled and include its retained text');
+    assert.match(html, /Intent pass findings[\s\S]*Intent review found the requested failure path missing/,
+      'the intent pass must be labelled and include its findings');
+    assert.match(html, /Correctness pass[\s\S]*Consistency: consistent/);
+    assert.match(html, /Intent pass[\s\S]*Consistency: disagreement/);
+    assert.match(html, /Executor rationale[\s\S]*Kept the local diff intact/);
+    assert.ok(html.includes(`code &quot;${run.work}&quot;`),
+      `VS Code command must use the actual worktree directory ${run.work}`);
     assert.match(html, /Correctness[\s\S]*in 11/);
     assert.match(html, /Intent[\s\S]*out 7/);
   } finally {
@@ -312,6 +344,18 @@ test('dashboard serving and SSE observation leave every run byte unchanged', asy
     event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
   ], '{"unfinished":');
   writeFileSync(join(run.work, 'operator-note.txt'), 'must remain byte-for-byte identical\n');
+  writeFileSync(join(run.work, 'ccc-runfacts.json'), JSON.stringify({
+    runId,
+    verdict: 'NO_BLOCKERS',
+    verdictSource: 'result',
+    verifierFindings: 'No correctness blockers.',
+    verifierConsistency: { status: 'consistent' },
+    intentVerdict: 'NO_BLOCKERS',
+    intentVerdictSource: 'assistant',
+    intentVerifierFindings: 'The implementation matches the task.',
+    intentVerifierConsistency: { status: 'consistent' },
+    iterations: [{ lastMessage: 'Implemented the reviewed change.' }],
+  }));
   mkdirSync(join(run.work, 'nested'));
   writeFileSync(join(run.work, 'nested', 'binary.bin'), Buffer.from([0, 1, 2, 255]));
   const before = snapshotContents(run.directory);

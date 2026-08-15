@@ -73,13 +73,16 @@ async function main() {
   }
   if (opts.command === 'publish') {
     // Publishing is deliberately absent from the run path. Load its filesystem, Git,
-    // and HTTP code only after the operator selects this separate command.
-    const { publishRunToForge, redactForgeError } = await import('../src/forge-publisher.js');
+    // and GitHub CLI code only after the operator selects this separate command.
+    const { publishRunToGitHub } = await import('../src/github-publisher.js');
     try {
-      const published = await publishRunToForge({ runDirectory: opts.runDirectory });
+      const published = await publishRunToGitHub({
+        runDirectory: opts.runDirectory,
+        ghBin: process.env.CCC_GH_BIN ?? 'gh',
+      });
       process.stdout.write(`${published.url}\n`);
     } catch (error) {
-      process.stderr.write(`publish failed: ${redactForgeError(error)}\n`);
+      process.stderr.write(`publish failed: ${error.message}\n`);
       process.exit(2);
     }
     return;

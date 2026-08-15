@@ -94,9 +94,12 @@ console.log(`self-test: PASS (${pass} tests)`);
 
 // Report vendor CLI availability (informational — the loop preflights these at run time).
 const probe = process.platform === 'win32' ? 'where' : 'which';
-for (const bin of ['git', 'codex', 'agent']) {
+for (const bin of ['git', 'codex', 'agent', 'gh']) {
   const r = spawnSync(probe, [bin], { encoding: 'utf8' });
-  console.log(`${bin}: ${r.status === 0 ? 'found' : 'NOT FOUND (needed at run time)'}`);
+  const missing = bin === 'gh'
+    ? 'NOT FOUND (needed only for explicit publish)'
+    : 'NOT FOUND (needed at run time)';
+  console.log(`${bin}: ${r.status === 0 ? 'found' : missing}`);
 }
 
 const scratch = process.env.CCC_SCRATCH_ROOT ?? (process.platform === 'win32' ? 'C:/ccc/w' : '~/.ccc/w');

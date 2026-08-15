@@ -59,15 +59,15 @@ test('the installer payload includes every shippable top-level entry', () => {
   assert.deepEqual(omitted, [], `PAYLOAD omits shippable root entries: ${omitted.join(', ')}`);
 });
 
-test('forge publishing is lazy and absent from the run implementation', () => {
+test('GitHub publishing is lazy and absent from the run implementation', () => {
   const cli = readFileSync(cliPath, 'utf8');
   const run = readFileSync(runPath, 'utf8');
-  assert.doesNotMatch(cli, /^import .*forge-publisher/m,
-    'a static publisher import would put forge checks on every run and batch launch');
+  assert.doesNotMatch(cli, /^import .*github-publisher/m,
+    'a static publisher import would put GitHub checks on every run and batch launch');
   assert.match(cli,
-    /opts\.command === 'publish'[\s\S]*await import\('\.\.\/src\/forge-publisher\.js'\)/,
+    /opts\.command === 'publish'[\s\S]*await import\('\.\.\/src\/github-publisher\.js'\)/,
     'only the explicit publish branch may load the publisher');
-  assert.doesNotMatch(run, /forge-publisher|publishRunToForge|CCC_FORGE_/,
+  assert.doesNotMatch(run, /github-publisher|publishRunToGitHub|gh auth/,
     'the run implementation must not import, invoke, or configure publishing');
 });
 

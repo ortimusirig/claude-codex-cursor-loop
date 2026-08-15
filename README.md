@@ -53,7 +53,8 @@ node install.mjs
 
 Copies the payload to `~/.claude/skills/run-claude-codex-cursor-loop`, verifies **every file
 by SHA-256**, runs the test suite **from the installed location**, and reports whether `git`,
-`codex`, and `agent` are on PATH. Non-zero exit means it did not install cleanly.
+`codex`, `agent`, and the optional `gh` publisher are on PATH. Non-zero exit means it did not
+install cleanly.
 
 Options: `--dry-run` (preview, writes nothing), `--name <x>` (install under a different name
 to run side-by-side with an existing copy).
@@ -168,25 +169,21 @@ error; multi-word inline prose is used verbatim.
 An unrecognised outcome exits 3 rather than 0, so an outcome added later cannot silently
 become a success.
 
-### Optional Forgejo publishing
+### Optional GitHub publishing
 
-Forgejo is the primary target; Gitea exposes the same API. Install the Forgejo binary, run
-`forgejo web`, finish setup at `http://localhost:3000`, and create the destination repository
-and a repository-write access token. Set the three values only in the publisher's environment:
+Install the GitHub CLI, authenticate it once with `gh auth login`, and configure a
+`github.com` remote in the run's repository. Then publish a completed run explicitly:
 
 ```sh
-export CCC_FORGE_URL=http://localhost:3000
-export CCC_FORGE_REPOSITORY=owner/repository
-export CCC_FORGE_TOKEN=the-access-token
 node bin/loop.js publish /path/to/completed/run/w
 ```
 
-The explicit command pushes the reviewed branch, creates or updates one pull request, posts
-both verifier passes as pull reviews, prints the PR URL, and records it in `ccc-forge.json`.
-It is never called by `run` or `batch`. Failed publishing leaves the completed run unchanged.
-
-Forgejo is GPLv3-or-later. Running it imposes no licence obligations. Gitea is MIT if that is
-preferred.
+The command pushes the reviewed branch, creates or updates one pull request, posts each
+verifier pass as its own attributable comment, prints the PR URL, and records it in
+`ccc-github.json`. The pull-request body includes the executor rationale, outcome, gate
+status, both verdicts and their sources, and token usage. Authentication remains entirely
+`gh`'s responsibility. Publishing is never called or checked by `run` or `batch`, and a
+failed publish leaves the completed run directory unchanged.
 
 Each run writes `ccc-runfacts.json`, `ccc-report.md`, and append-only `events.jsonl` into the
 isolated directory, plus a branch and a diff to review. Stdout remains exactly one JSON
@@ -230,9 +227,13 @@ isolated `w` directory, its parent run directory, or a campaign directory contai
 `campaign-events.jsonl`. It tolerates a final line that is still being appended, distinguishes
 every campaign unit, and never writes to the run or signals its processes.
 
-`dashboard` serves the same event data as a live, side-by-side browser view. Pass a run
-directory for one card, `--scratch-root <directory>` for every run under a campaign root, or
-neither to use `CCC_SCRATCH_ROOT` and its platform default. It listens only on
+`dashboard` serves the live event data plus completed run facts as a side-by-side browser
+view. Each completed card includes both labelled verifier texts, each verdict's source and
+evidence-consistency status, the executor rationale, and a copyable `code "<worktree>"`
+command for reviewing the diff in VS Code. A source of `none` is called out as a fail-safe
+default rather than a reviewer finding. Pass a run directory for one card,
+`--scratch-root <directory>` for every run under a campaign root, or neither to use
+`CCC_SCRATCH_ROOT` and its platform default. It listens only on
 `127.0.0.1`, prints its URL on stdout, and uses fixed port `7331` unless `--port` is set. If
 that port is occupied it exits with an error; it never silently chooses another. The page,
 CSS, JavaScript, HTTP server, and server-sent event stream use only Node built-ins and make

@@ -1,6 +1,6 @@
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { readEventStream } from './event-stream.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
 
@@ -14,6 +14,9 @@ function emptyUsage() {
 function emptyRun(directory, overrides = {}) {
   return {
     directory,
+    worktreeDirectory: basename(directory).toLowerCase() === 'w'
+      ? directory
+      : join(directory, 'w'),
     eventsPath: null,
     runId: basename(directory),
     state: 'waiting',
@@ -31,7 +34,59 @@ function emptyRun(directory, overrides = {}) {
       intent: emptyUsage(),
     },
     stalls: [],
+    executorRationale: null,
     ...overrides,
+  };
+}
+
+function readRunFacts(eventsPath) {
+  if (eventsPath === null) return null;
+  const factsPath = join(dirname(eventsPath), 'ccc-runfacts.json');
+  if (!existsSync(factsPath)) return null;
+  try {
+    const facts = JSON.parse(readFileSync(factsPath, { encoding: 'utf8', flag: 'r' }));
+    return facts && typeof facts === 'object' && !Array.isArray(facts) ? facts : null;
+  } catch {
+    // Facts are written before report/finish. A poll overlapping that write keeps the
+    // event-derived state and picks up the complete document on its next read.
+    return null;
+  }
+}
+
+function enrichFromFacts(verifiers, facts) {
+  if (facts === null) return { verifiers, executorRationale: null };
+  const iteration = Array.isArray(facts.iterations) ? facts.iterations.at(-1) : null;
+  const completed = {
+    correctness: {
+      verdict: iteration?.verifier?.verdict ?? facts.verdict ?? null,
+      verdictSource: iteration?.verifier?.verdictSource ?? facts.verdictSource ?? null,
+      verdictConsistency: iteration?.verifier?.verdictConsistency?.status
+        ?? facts.verifierConsistency?.status
+        ?? null,
+      findings: facts.verifierFindings ?? iteration?.verifier?.findings ?? null,
+    },
+    intent: {
+      verdict: iteration?.intentVerifier?.verdict ?? facts.intentVerdict ?? null,
+      verdictSource: iteration?.intentVerifier?.verdictSource
+        ?? facts.intentVerdictSource
+        ?? null,
+      verdictConsistency: iteration?.intentVerifier?.verdictConsistency?.status
+        ?? facts.intentVerifierConsistency?.status
+        ?? null,
+      findings: facts.intentVerifierFindings ?? iteration?.intentVerifier?.findings ?? null,
+    },
+  };
+  for (const pass of ['correctness', 'intent']) {
+    if (verifiers[pass] !== null || completed[pass].verdict !== null
+      || completed[pass].findings !== null) {
+      completed[pass] = { ...(verifiers[pass] ?? {}), ...completed[pass] };
+    } else {
+      completed[pass] = null;
+    }
+  }
+  return {
+    verifiers: completed,
+    executorRationale: iteration?.lastMessage ?? null,
   };
 }
 
@@ -81,6 +136,8 @@ function digestRunDirectory(runDirectory) {
       verifiers[event.pass] = {
         verdict: event.verdict ?? null,
         verdictSource: event.source ?? event.verdictSource ?? null,
+        verdictConsistency: event.verdictConsistency ?? null,
+        findings: null,
         code: event.code ?? null,
         timedOut: event.timedOut === true,
         ts: event.ts ?? null,
@@ -103,10 +160,12 @@ function digestRunDirectory(runDirectory) {
     if (event.type === 'stalled') stalls.push(event);
   }
 
+  const completedDetails = enrichFromFacts(verifiers, readRunFacts(stream.eventsPath));
   const lastEvent = events.at(-1) ?? null;
   const finished = events.some((event) => event.stage === 'report' && event.type === 'finish');
   return {
     directory,
+    worktreeDirectory: dirname(stream.eventsPath),
     eventsPath: stream.eventsPath,
     runId: stream.runId,
     state: finished ? 'finished' : events.length > 0 ? 'running' : 'waiting',
@@ -122,11 +181,12 @@ function digestRunDirectory(runDirectory) {
       pass: event.pass ?? null,
       verdict: event.verdict ?? null,
     })),
-    verifiers,
+    verifiers: completedDetails.verifiers,
     files,
     gateCommands,
     tokens,
     stalls,
+    executorRationale: completedDetails.executorRationale,
   };
 }
 
@@ -226,16 +286,26 @@ function renderVerifier(name, verifier) {
     return `<div class="verifier pending"><b>${escapeHtml(name)}</b><span>Pending</span></div>`;
   }
   const source = verifier.verdictSource ?? 'unknown';
+  const consistency = verifier.verdictConsistency ?? 'not recorded';
+  const findings = verifier.findings ?? '(findings are recorded when the run report completes)';
+  const findingsHeading = source === 'none'
+    ? `${name} retained output (not authoritative reviewer findings)`
+    : `${name} findings`;
+  const detail = `<div class="verifier-findings"><h4>${escapeHtml(findingsHeading)}</h4>`
+    + `<pre>${escapeHtml(findings)}</pre></div>`;
   if (source === 'none') {
     return `<div class="verifier fail-safe" data-verdict-kind="fail-safe">`
       + `<b>${escapeHtml(name)}</b><strong>${escapeHtml(verifier.verdict ?? 'ISSUES')}</strong>`
       + `<span>verdictSource: none</span>`
-      + `<em>No verdict marker found — ISSUES is a fail-safe, not a reviewer finding.</em></div>`;
+      + `<span>Consistency: ${escapeHtml(consistency)}</span>`
+      + `<em>No verdict marker found — ISSUES is a fail-safe, not a reviewer finding.</em>`
+      + `${detail}</div>`;
   }
   const finding = verifier.verdict === 'ISSUES' ? 'Reviewer reported ISSUES' : 'Reviewer verdict';
   return `<div class="verifier reviewer" data-verdict-kind="reviewer">`
     + `<b>${escapeHtml(name)}</b><strong>${escapeHtml(verifier.verdict ?? 'unknown')}</strong>`
-    + `<span>verdictSource: ${escapeHtml(source)}</span><em>${finding}</em></div>`;
+    + `<span>verdictSource: ${escapeHtml(source)}</span>`
+    + `<span>Consistency: ${escapeHtml(consistency)}</span><em>${finding}</em>${detail}</div>`;
 }
 
 function renderTimeline(timeline) {
@@ -275,6 +345,9 @@ function renderRun(run) {
       return `<li><strong>STALL</strong><span>${escapeHtml(formatDuration(stall.gapMs))}`
         + ` after ${escapeHtml(last.stage ?? 'unknown')}/${escapeHtml(last.type ?? 'unknown')}</span></li>`;
     }).join('')}</ul>`;
+  const rationale = run.executorRationale
+    ?? '(executor rationale is recorded when the run report completes)';
+  const vscodeCommand = `code "${run.worktreeDirectory.replaceAll('"', '\\"')}"`;
 
   return `<article class="run-card ${escapeHtml(run.state)}" data-run-id="${escapeHtml(run.runId)}">`
     + `<header><div><h2>${escapeHtml(run.runId)}</h2><p title="${escapeHtml(run.directory)}">`
@@ -286,6 +359,9 @@ function renderRun(run) {
     + '<section><h3>Verifier seats</h3>'
     + renderVerifier('Correctness pass', run.verifiers.correctness)
     + renderVerifier('Intent pass', run.verifiers.intent) + '</section>'
+    + `<section><h3>Executor rationale</h3><pre class="prose">${escapeHtml(rationale)}</pre></section>`
+    + '<section><h3>Review the diff in VS Code</h3>'
+    + `<pre class="command"><code>${escapeHtml(vscodeCommand)}</code></pre></section>`
     + '<section><h3>Token usage by seat</h3><dl class="tokens">'
     + `<dt>Executor</dt><dd>${escapeHtml(usageText(run.tokens.executor))}</dd>`
     + `<dt>Correctness</dt><dd>${escapeHtml(usageText(run.tokens.correctness))}</dd>`
@@ -312,6 +388,7 @@ function renderPage(snapshot) {
 :root{color-scheme:light dark;--bg:#f4f5f2;--card:#fff;--ink:#18201d;--muted:#65716b;--line:#d9dedb;--ok:#197047;--warn:#9c5a08;--bad:#a32828;--soft:#eef1ef}
 @media(prefers-color-scheme:dark){:root{--bg:#111513;--card:#19201d;--ink:#edf2ef;--muted:#a5b0aa;--line:#35403a;--soft:#222b27;--ok:#6ed39e;--warn:#f0ae59;--bad:#ff8b8b}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}body>header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:end;justify-content:space-between}h1{font-size:1.15rem;margin:0}body>header p{margin:.15rem 0 0;color:var(--muted);word-break:break-all}.connection{white-space:nowrap;color:var(--ok)}main{display:flex;align-items:flex-start;gap:1rem;padding:1rem;overflow-x:auto;min-height:calc(100vh - 70px)}.run-card{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--warn);border-radius:7px;padding:1rem;flex:1 0 360px;min-width:360px;max-width:560px}.run-card.finished{border-top-color:var(--ok)}.run-card.error{border-top-color:var(--bad)}.run-card>header{display:flex;justify-content:space-between;gap:.8rem}.run-card h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.run-card header p{font-size:.72rem;color:var(--muted);margin:.2rem 0;overflow-wrap:anywhere}.state{border:1px solid currentColor;border-radius:999px;padding:.15rem .55rem;height:max-content;font-size:.75rem}.state.finished{color:var(--ok)}.state.error{color:var(--bad)}.state.running{color:var(--warn)}.notice,.empty{padding:.7rem;background:var(--soft);border-radius:5px}.empty{min-width:320px}.current{display:grid;grid-template-columns:auto 1fr;gap:.2rem .65rem;background:var(--soft);padding:.7rem;margin:.8rem 0;border-radius:5px}.current span{color:var(--muted)}.current small{grid-column:2;color:var(--muted)}section{margin-top:1rem}h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .45rem}.verifier{display:grid;grid-template-columns:1fr auto;gap:.1rem .6rem;border-left:3px solid var(--line);padding:.45rem .6rem;margin:.35rem 0;background:var(--soft)}.verifier span,.verifier em{font-size:.75rem;color:var(--muted)}.verifier em{grid-column:1/-1}.verifier.fail-safe{border-color:var(--warn)}.verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}.tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}.tokens dt{font-weight:650}.tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}.rows,.stalls{list-style:none;margin:0;padding:0}.rows li,.stalls li{display:flex;justify-content:space-between;gap:.7rem;border-top:1px solid var(--line);padding:.35rem 0}.rows code{overflow-wrap:anywhere}.rows span{white-space:nowrap;color:var(--muted)}.exit-ok{color:var(--ok)!important}.exit-fail{color:var(--bad)!important}.stalls li{justify-content:flex-start;color:var(--bad)}.timeline{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto}.timeline li{display:grid;grid-template-columns:4.8rem 5.5rem 1fr;gap:.35rem;border-left:2px solid var(--line);padding:.25rem .5rem}.timeline time,.timeline span,.timeline small{color:var(--muted)}.timeline small{grid-column:2/-1}.muted{color:var(--muted);margin:.25rem 0}@media(max-width:500px){main{padding:.5rem}.run-card{min-width:calc(100vw - 1rem);flex-basis:calc(100vw - 1rem)}body>header{align-items:start;flex-direction:column}}
+.verifier-findings{grid-column:1/-1;margin-top:.35rem}.verifier-findings h4{font-size:.75rem;margin:.15rem 0}.verifier-findings pre,.prose,.command{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.command{white-space:pre;overflow:auto}
 </style>
 </head>
 <body>
