@@ -95,6 +95,8 @@ export function parseArgs(argv) {
         concurrency: { type: 'string' },
         'token-budget': { type: 'string' },
         'unit-kind': { type: 'string', multiple: true },
+        'unit-id': { type: 'string', multiple: true },
+        'depends-on': { type: 'string', multiple: true },
       } : {}),
       quiet: { type: 'boolean' },
     },
@@ -130,12 +132,49 @@ export function parseArgs(argv) {
   if (rawKinds.length !== 1 && rawKinds.length !== tasks.length) {
     throw new Error('--unit-kind must be given once for all tasks or once per --task');
   }
-  const parsed = {
-    command,
-    tasks: tasks.map((task, index) => ({
+  const unitIds = values['unit-id'];
+  if (unitIds !== undefined && unitIds.length !== tasks.length) {
+    throw new Error('--unit-id must be given once per --task');
+  }
+  if (unitIds?.some((unitId) => unitId === '')) {
+    throw new Error('--unit-id values must be non-empty');
+  }
+  if (unitIds && new Set(unitIds).size !== unitIds.length) {
+    throw new Error(`duplicate --unit-id: ${unitIds.find((id, index) => unitIds.indexOf(id) !== index)}`);
+  }
+  const rawEdges = values['depends-on'] ?? [];
+  if (rawEdges.length > 0 && unitIds === undefined) {
+    throw new Error('--depends-on requires one --unit-id per --task');
+  }
+  const parentsByChild = new Map();
+  for (const edge of rawEdges) {
+    const separator = edge.indexOf('=');
+    const child = separator < 0 ? '' : edge.slice(0, separator);
+    const parent = separator < 0 ? '' : edge.slice(separator + 1);
+    if (!child || !parent) {
+      throw new Error(`invalid --depends-on ${edge}; expected CHILD=PARENT`);
+    }
+    if (!unitIds.includes(child)) {
+      throw new Error(`--depends-on names unknown child unit "${child}"`);
+    }
+    const parents = parentsByChild.get(child) ?? [];
+    parents.push(parent);
+    parentsByChild.set(child, parents);
+  }
+  const campaignTasks = tasks.map((task, index) => {
+    const unit = {
       task,
       unitKind: rawKinds.length === 1 ? rawKinds[0] : rawKinds[index],
-    })),
+      ...(unitIds === undefined ? {} : { unitId: unitIds[index] }),
+    };
+    const parents = parentsByChild.get(unit.unitId) ?? [];
+    if (parents.length === 1) unit.dependsOn = parents[0];
+    else if (parents.length > 1) unit.dependsOn = parents;
+    return unit;
+  });
+  const parsed = {
+    command,
+    tasks: campaignTasks,
     target: values.target,
     gate: values.gate,
     gateRetries: clampInt(values['gate-retries'], 2, 0, 3),

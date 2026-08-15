@@ -253,6 +253,43 @@ export async function prepareCampaignBase({ target, campaignId, scratchRoot }) {
   });
 }
 
+export async function commitCampaignResult({ dir, branch, unitId }) {
+  if (typeof dir !== 'string' || dir === '') {
+    throw new TypeError('campaign result directory must be a non-empty string');
+  }
+  if (typeof branch !== 'string' || branch === '') {
+    throw new TypeError('campaign result branch must be a non-empty string');
+  }
+  if (typeof unitId !== 'string' || unitId === '') {
+    throw new TypeError('campaign result unitId must be a non-empty string');
+  }
+  const info = await repositoryInfo(dir);
+  if (!info) throw new Error(`campaign result is not a git worktree: ${dir}`);
+
+  return withRepositoryLock(info.lockKey, async () => {
+    const currentBranch = (await git(dir, 'symbolic-ref', '--short', 'HEAD')).trim();
+    if (currentBranch !== branch) {
+      throw new Error(
+        `campaign unit "${unitId}" expected result branch "${branch}", found "${currentBranch}"`,
+      );
+    }
+
+    const staged = await spawnCapture('git', ['-C', dir, 'diff', '--cached', '--quiet', 'HEAD']);
+    if (staged.code !== 0 && staged.code !== 1) {
+      throw new Error(`cannot inspect campaign result for unit "${unitId}": ${staged.stderr.trim()}`);
+    }
+    if (staged.code === 1) {
+      await git(
+        dir,
+        '-c', 'user.email=ccc@local',
+        '-c', 'user.name=ccc',
+        'commit', '-m', `campaign result for ${unitId}`,
+      );
+    }
+    return (await git(dir, 'rev-parse', 'HEAD')).trim();
+  });
+}
+
 export async function isolate({
   target,
   runId,

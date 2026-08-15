@@ -288,7 +288,15 @@ test('fully exercised campaign emissions have set equality with the declared eve
   try {
     const result = await runCampaign({
       campaignId: 'event-conformance',
-      tasks: [{ task: 'Write observed.txt.', unitKind: 'node', unitId: 'conformance-unit' }],
+      tasks: [
+        { task: 'Write observed.txt.', unitKind: 'node', unitId: 'conformance-parent' },
+        {
+          task: 'Observe the predecessor result.',
+          unitKind: 'node',
+          unitId: 'conformance-child',
+          dependsOn: 'conformance-parent',
+        },
+      ],
       target: tgt,
       gate: [{
         bin: process.execPath,
@@ -322,6 +330,8 @@ test('fully exercised campaign emissions have set equality with the declared eve
     const UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN = [
       // The budget is deliberately ample, so every planned unit dispatches.
       'unit/not_dispatched',
+      // Both predecessor runs succeed, so the dependent is released rather than skipped.
+      'unit/skipped',
       // Each watchdog pair needs a real period of silence longer than its threshold. Injecting
       // those gaps would turn this healthy, fully exercised retry path into timeout scenarios.
       'isolate/stalled',

@@ -113,6 +113,37 @@ test('batch defaults concurrency to two and broadcasts the candidate unit kind',
   assert.deepEqual(parsed.tasks.map((unit) => unit.unitKind), ['candidate', 'candidate']);
 });
 
+test('batch parses explicit unit ids and tree dependency edges', () => {
+  const parsed = parseArgs([
+    'batch',
+    '--task', 'parent plan', '--unit-id', 'parent',
+    '--task', 'child plan', '--unit-id', 'child',
+    '--task', 'sibling plan', '--unit-id', 'sibling',
+    '--depends-on', 'child=parent',
+    '--depends-on', 'sibling=parent',
+    '--target', 't', '--gate', 'g', '--unit-kind', 'node',
+  ]);
+  assert.deepEqual(parsed.tasks, [
+    { task: 'parent plan', unitKind: 'node', unitId: 'parent' },
+    { task: 'child plan', unitKind: 'node', unitId: 'child', dependsOn: 'parent' },
+    { task: 'sibling plan', unitKind: 'node', unitId: 'sibling', dependsOn: 'parent' },
+  ]);
+});
+
+test('batch dependency flags reject ambiguous or malformed edge declarations', () => {
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--task', 'b', '--unit-id', 'a',
+    '--target', 't', '--gate', 'g',
+  ]), /unit-id.*once per/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--depends-on', 'a=b', '--target', 't', '--gate', 'g',
+  ]), /depends-on requires.*unit-id/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--unit-id', 'a', '--depends-on', 'not-an-edge',
+    '--target', 't', '--gate', 'g',
+  ]), /expected CHILD=PARENT/i);
+});
+
 test('batch rejects unsafe fan-out, bad kinds, and mismatched per-task kinds', () => {
   assert.throws(() => parseArgs([
     'batch', '--task', 'a', '--target', 't', '--gate', 'g', '--concurrency', '17',

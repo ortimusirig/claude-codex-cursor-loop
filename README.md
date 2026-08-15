@@ -62,7 +62,7 @@ to run side-by-side with an existing copy).
 
 ```
 node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--quiet]
-node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind KIND] [--quiet]
+node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind KIND] [--unit-id ID ...] [--depends-on CHILD=PARENT ...] [--quiet]
 node bin/loop.js status <run-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 ```
@@ -87,10 +87,21 @@ worktree, gate, two read-only verifier passes, run facts, and `events.jsonl`.
 | `--concurrency` | 2 | 1–16 simultaneously in-flight units |
 | `--token-budget` | 12,500,000 | positive campaign-wide token count |
 | `--unit-kind` | `candidate` | `candidate`, `node`, or `merge`; give once for every task or once per `--task` |
+| `--unit-id` | generated | stable unit ID; when used, give once per `--task` |
+| `--depends-on` | none | `CHILD=PARENT`; repeat for edges, with at most one parent per child |
 
 The budget counts input plus output tokens. Cached input and reasoning output are already
 subsets of those values and are not counted twice. Dispatch stops after completed run facts
 push the campaign over budget; units already in flight are allowed to finish.
+
+Dependencies are a declared tree topology: roots fan out up to the concurrency limit, while a
+dependent waits without occupying a slot. After a successful predecessor finishes, its staged
+result is committed on that unit's result branch and the dependent isolates from that branch.
+`no-op` is also successful and releases dependents; its result branch simply still names its
+base commit. A `gate-failed`, `timed-out`, or `verifier-failed` predecessor does not release
+broken work: its dependents are marked `skipped`, and that skip cascades transitively. Unrelated
+roots continue normally. Unknown parents, self-dependencies, cycles, and multiple parents
+(fan-in) are rejected before any executor launches. Fan-in and merging are not supported yet.
 
 `gate.json` is a JSON array of commands; **pass/fail is by exit code only**:
 
@@ -130,7 +141,8 @@ run-facts document; live event summaries use stderr.
 unit's identity, dispatch status, and run facts, plus a `rollup` with counts, aggregate usage,
 budget state, and outcome. Its single-writer `campaign-events.jsonl` lives at the
 `campaignEventsPath` reported in that document, outside every unit worktree. The campaign
-stream contains campaign and round boundaries plus unit lifecycle records; detailed stage
+stream contains campaign and round boundaries plus unit lifecycle records, including explicit
+`waiting`, `released`, and `skipped` records for dependency edges; detailed stage
 events remain in each unit's own stream. Campaign/round records carry null unit identity
 because they describe no individual unit; unit lifecycle and per-unit records carry the exact
 `campaignId`, round, `unitId`, and `unitKind`.

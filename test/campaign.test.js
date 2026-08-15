@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -11,7 +12,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { runCampaign } from '../src/campaign.js';
-import { reportEvent } from '../src/events.js';
+import { formatEventSummary, reportEvent } from '../src/events.js';
 import { exitCodeFor } from '../src/exit.js';
 import { spawnCapture } from '../src/spawn.js';
 
@@ -96,6 +97,344 @@ test('configured concurrency bounds the observed in-flight unit count', async ()
     `actual in-flight observations were ${JSON.stringify(observations)}`);
   assert.ok(observations.includes(2), 'positive control: two units must actually overlap');
   assert.ok(observations.every((count) => count <= 2), 'no observation may exceed the bound');
+});
+
+test('a dependent isolates from its predecessor result branch and sees its exact content', async () => {
+  mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
+  const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.tree-inheritance-'));
+  const target = mkdtempSync(join(tmpdir(), 'tree-inheritance-target-'));
+  writeFileSync(join(target, 'seed.txt'), 'campaign base\n');
+  try {
+    const result = await runCampaign({
+      campaignId: 'tree-inheritance',
+      tasks: [
+        { task: 'Write the predecessor marker.', unitId: 'tree-parent', unitKind: 'node' },
+        {
+          task: 'Observe the predecessor marker.',
+          unitId: 'tree-child',
+          unitKind: 'node',
+          dependsOn: 'tree-parent',
+        },
+      ],
+      target,
+      gate: [],
+      concurrency: 2,
+      tokenBudget: 1000,
+      scratchRoot,
+      runOptions: {
+        gateRetries: 0,
+        adapters: {
+          runExecutor: async ({ cwd, runId }) => {
+            if (runId === 'tree-parent') {
+              writeFileSync(join(cwd, 'predecessor.txt'), 'specific predecessor content: alpha-42');
+              return { changedFiles: ['predecessor.txt'], lastMessage: 'wrote predecessor', usage: {} };
+            }
+            const inherited = readFileSync(join(cwd, 'predecessor.txt'), 'utf8');
+            writeFileSync(join(cwd, 'dependent-observation.txt'), `observed: ${inherited}`);
+            return {
+              changedFiles: ['dependent-observation.txt'],
+              lastMessage: 'observed predecessor',
+              usage: {},
+            };
+          },
+          runGate: async () => ({ passed: true, results: [] }),
+          runVerifier: async () => ({
+            verdict: 'NO_BLOCKERS', verdictSource: 'result', launchFailed: false, usage: {},
+          }),
+        },
+      },
+    });
+
+    const [parent, child] = result.units;
+    assert.equal(parent.facts.outcome, 'review-ready');
+    assert.equal(child.facts.outcome, 'review-ready');
+    assert.equal(child.facts.baseRef, parent.facts.branch,
+      'the child must name the predecessor result branch, not the campaign base');
+    assert.equal(child.facts.baseCommit, parent.resultCommit,
+      'the child base commit must be the checkpoint containing the predecessor result');
+    assert.equal(
+      readFileSync(join(child.facts.dir, 'predecessor.txt'), 'utf8'),
+      'specific predecessor content: alpha-42',
+    );
+    assert.equal(
+      readFileSync(join(child.facts.dir, 'dependent-observation.txt'), 'utf8'),
+      'observed: specific predecessor content: alpha-42',
+    );
+    assert.equal(existsSync(join(target, 'predecessor.txt')), false,
+      'the campaign must not materialize predecessor changes in the target folder');
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('a dependent starts after its predecessor finishes and receives a release event', async () => {
+  const observed = [];
+  const events = [];
+  const result = await runCampaign({
+    campaignId: 'ordered-tree',
+    tasks: [
+      { task: 'parent', unitId: 'ordered-parent', branch: 'planner/ordered-parent' },
+      { task: 'child', unitId: 'ordered-child', dependsOn: 'ordered-parent' },
+    ],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 2,
+    tokenBudget: 1000,
+    reporter: (event) => events.push(event),
+    runUnit: async ({ runId, baseRef }) => {
+      observed.push(`start:${runId}`);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(`finish:${runId}`);
+      if (runId === 'ordered-child') assert.equal(baseRef, 'planner/ordered-parent');
+      return { ...successFacts(runId), branch: runId === 'ordered-parent'
+        ? 'planner/ordered-parent' : `ccc/${runId}` };
+    },
+  });
+
+  assert.equal(result.rollup.outcome, 'review-ready');
+  assert.ok(
+    observed.indexOf('finish:ordered-parent') < observed.indexOf('start:ordered-child'),
+    `observed order was ${JSON.stringify(observed)}`,
+  );
+  const parentFinish = events.findIndex((event) => (
+    event.unitId === 'ordered-parent' && event.stage === 'unit' && event.type === 'finish'
+  ));
+  const childRelease = events.findIndex((event) => (
+    event.unitId === 'ordered-child' && event.stage === 'unit' && event.type === 'released'
+  ));
+  const childStart = events.findIndex((event) => (
+    event.unitId === 'ordered-child' && event.stage === 'unit' && event.type === 'start'
+  ));
+  assert.ok(parentFinish >= 0 && parentFinish < childRelease && childRelease < childStart,
+    `unit lifecycle was ${JSON.stringify(events.map((event) => `${event.unitId}:${event.type}`))}`);
+});
+
+test('siblings released by one predecessor actually overlap up to the concurrency bound', async () => {
+  let siblingInFlight = 0;
+  let observedMaximum = 0;
+  const observations = [];
+  const result = await runCampaign({
+    campaignId: 'sibling-overlap',
+    tasks: [
+      { task: 'parent', unitId: 'sibling-parent' },
+      { task: 'left', unitId: 'sibling-left', dependsOn: 'sibling-parent' },
+      { task: 'right', unitId: 'sibling-right', dependsOn: 'sibling-parent' },
+    ],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 2,
+    tokenBudget: 1000,
+    runUnit: async ({ runId }) => {
+      if (runId !== 'sibling-parent') {
+        siblingInFlight++;
+        observedMaximum = Math.max(observedMaximum, siblingInFlight);
+        observations.push(siblingInFlight);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        siblingInFlight--;
+        observations.push(siblingInFlight);
+      }
+      return successFacts(runId);
+    },
+  });
+
+  assert.equal(result.rollup.counts.succeeded, 3);
+  assert.equal(observedMaximum, 2,
+    `actual sibling in-flight observations were ${JSON.stringify(observations)}`);
+  assert.ok(observations.includes(2), 'positive control: both siblings must actually overlap');
+});
+
+test('a waiting unit holds no slot when concurrency is one', async () => {
+  const launched = [];
+  const campaign = runCampaign({
+    campaignId: 'single-slot-chain',
+    tasks: [
+      { task: 'parent', unitId: 'slot-parent' },
+      { task: 'child', unitId: 'slot-child', dependsOn: 'slot-parent' },
+    ],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 1,
+    tokenBudget: 1000,
+    runUnit: async ({ runId }) => {
+      launched.push(runId);
+      await new Promise((resolve) => setImmediate(resolve));
+      return successFacts(runId);
+    },
+  });
+  let deadlockTimer;
+  const result = await Promise.race([
+    campaign,
+    new Promise((_, reject) => {
+      deadlockTimer = setTimeout(() => reject(new Error('chain deadlocked')), 500);
+    }),
+  ]).finally(() => clearTimeout(deadlockTimer));
+  assert.deepEqual(launched, ['slot-parent', 'slot-child']);
+  assert.equal(result.rollup.counts.succeeded, 2);
+});
+
+test('a failed predecessor skips descendants transitively while an unrelated branch finishes', async () => {
+  const launched = [];
+  const events = [];
+  const result = await runCampaign({
+    campaignId: 'skip-cascade',
+    tasks: [
+      { task: 'broken root', unitId: 'broken-root' },
+      { task: 'blocked child', unitId: 'blocked-child', dependsOn: 'broken-root' },
+      { task: 'blocked grandchild', unitId: 'blocked-grandchild', dependsOn: 'blocked-child' },
+      { task: 'independent root', unitId: 'independent-root' },
+    ],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 2,
+    tokenBudget: 1000,
+    reporter: (event) => events.push(event),
+    runUnit: async ({ runId }) => {
+      launched.push(runId);
+      await new Promise((resolve) => setImmediate(resolve));
+      return runId === 'broken-root'
+        ? { ...successFacts(runId), outcome: 'gate-failed' }
+        : successFacts(runId);
+    },
+  });
+
+  assert.deepEqual(new Set(launched), new Set(['broken-root', 'independent-root']));
+  assert.equal(result.units[0].status, 'completed');
+  assert.equal(result.units[1].status, 'skipped');
+  assert.equal(result.units[1].reason, 'predecessor-failed');
+  assert.equal(result.units[2].status, 'skipped');
+  assert.equal(result.units[2].reason, 'predecessor-skipped');
+  assert.equal(result.units[2].blockedByUnitId, 'broken-root');
+  assert.equal(result.units[3].status, 'completed');
+  assert.deepEqual(result.rollup.counts, {
+    planned: 4,
+    dispatched: 2,
+    completed: 2,
+    succeeded: 1,
+    failed: 1,
+    notDispatched: 0,
+    skipped: 2,
+  });
+  assert.equal(result.rollup.outcome, 'campaign-failed');
+  assert.deepEqual(
+    events.filter((event) => event.type === 'skipped').map((event) => event.unitId),
+    ['blocked-child', 'blocked-grandchild'],
+  );
+});
+
+test('all failed predecessor outcomes block children, while no-op releases them', async () => {
+  for (const outcome of ['gate-failed', 'timed-out', 'verifier-failed']) {
+    const launched = [];
+    const result = await runCampaign({
+      campaignId: `blocked-${outcome}`,
+      tasks: [
+        { task: 'parent', unitId: `parent-${outcome}` },
+        { task: 'child', unitId: `child-${outcome}`, dependsOn: `parent-${outcome}` },
+      ],
+      target: 'unused-by-adapter',
+      gate: [],
+      concurrency: 1,
+      tokenBudget: 1000,
+      runUnit: async ({ runId }) => {
+        launched.push(runId);
+        return { ...successFacts(runId), outcome };
+      },
+    });
+    assert.deepEqual(launched, [`parent-${outcome}`]);
+    assert.equal(result.units[1].status, 'skipped');
+    assert.equal(result.units[1].blockedByOutcome, outcome);
+  }
+
+  const noOpLaunches = [];
+  const noOp = await runCampaign({
+    campaignId: 'no-op-releases',
+    tasks: [
+      { task: 'parent', unitId: 'no-op-parent', branch: 'planner/no-op-parent' },
+      { task: 'child', unitId: 'no-op-child', dependsOn: 'no-op-parent' },
+    ],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 1,
+    tokenBudget: 1000,
+    runUnit: async ({ runId, baseRef }) => {
+      noOpLaunches.push(runId);
+      if (runId === 'no-op-child') assert.equal(baseRef, 'planner/no-op-parent');
+      return successFacts(runId);
+    },
+  });
+  assert.deepEqual(noOpLaunches, ['no-op-parent', 'no-op-child']);
+  assert.equal(noOp.units[1].status, 'completed');
+});
+
+test('every invalid graph is rejected before any executor launches', async () => {
+  const cases = [
+    {
+      name: 'unknown parent',
+      tasks: [{ task: 'child', unitId: 'unknown-child', dependsOn: 'missing-parent' }],
+      pattern: /unknown-child.*unknown unit.*missing-parent/i,
+    },
+    {
+      name: 'self dependency',
+      tasks: [{ task: 'self', unitId: 'self-unit', dependsOn: 'self-unit' }],
+      pattern: /self-unit.*depend on itself/i,
+    },
+    {
+      name: 'fan-in',
+      tasks: [
+        { task: 'a', unitId: 'fanin-a' },
+        { task: 'b', unitId: 'fanin-b' },
+        { task: 'child', unitId: 'fanin-child', dependsOn: ['fanin-a', 'fanin-b'] },
+      ],
+      pattern: /fanin-child.*more than one parent.*fanin-a.*fanin-b.*fan-in/i,
+    },
+    {
+      name: 'cycle',
+      tasks: [
+        { task: 'a', unitId: 'cycle-a', dependsOn: 'cycle-b' },
+        { task: 'b', unitId: 'cycle-b', dependsOn: 'cycle-a' },
+      ],
+      pattern: /cycle.*cycle-a.*cycle-b/i,
+    },
+  ];
+  for (const invalid of cases) {
+    let launches = 0;
+    await assert.rejects(runCampaign({
+      campaignId: `invalid-${invalid.name.replaceAll(' ', '-')}`,
+      tasks: invalid.tasks,
+      target: 'must-not-be-touched',
+      gate: [],
+      concurrency: 2,
+      tokenBudget: 1000,
+      runUnit: async () => {
+        launches++;
+        return successFacts('impossible');
+      },
+    }), invalid.pattern, invalid.name);
+    assert.equal(launches, 0, `${invalid.name} launched an executor before validation`);
+  }
+});
+
+test('campaign summaries make predecessor waiting distinct from a watchdog stall', async () => {
+  const events = [];
+  await runCampaign({
+    campaignId: 'waiting-observability',
+    tasks: [
+      { task: 'parent', unitId: 'watch-parent' },
+      { task: 'child', unitId: 'watch-child', dependsOn: 'watch-parent' },
+    ],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 1,
+    tokenBudget: 1000,
+    reporter: (event) => events.push(event),
+    runUnit: async ({ runId }) => successFacts(runId),
+  });
+  const waiting = events.find((event) => event.unitId === 'watch-child' && event.type === 'waiting');
+  assert.ok(waiting, 'the campaign stream must state that the child is waiting');
+  assert.equal(waiting.predecessorUnitId, 'watch-parent');
+  assert.match(formatEventSummary(waiting), /waiting on predecessor=watch-parent/i);
+  assert.doesNotMatch(formatEventSummary(waiting), /stalled/i,
+    'waiting on declared topology must not be presented as a watchdog stall');
 });
 
 test('one failed unit is isolated while its peers finish and the campaign is non-zero', async () => {

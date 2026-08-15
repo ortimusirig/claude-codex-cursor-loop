@@ -9,10 +9,10 @@ The controller (this Claude session) authors a plan, then invokes:
 
     node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL]
 
-For several independent plans against the same target and gate, invoke the separate batch
-engine (one repeated `--task` per unit):
+For several plans against the same target and gate, invoke the separate batch engine (one
+repeated `--task` per unit):
 
-    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind candidate|node|merge]
+    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--depends-on CHILD=PARENT ...]
 
 - **Gate config** (`gate.json`): a JSON array of `{ "bin": "...", "args": ["..."] }`; pass/fail is by exit code only.
 - Codex writes only inside a git-isolated copy; the real tree is never touched.
@@ -22,6 +22,7 @@ engine (one repeated `--task` per unit):
 - The command refuses to report success over a red gate. Review the report, then iterate or accept.
 - **Outcomes:** `review-ready`, `no-op`, `gate-failed`, `verifier-failed` when either Cursor pass exits non-zero without producing a result or assistant event, or `timed-out` when a terminal stage exceeds its deadline. Batch adds `campaign-failed` and `budget-exhausted` rollups.
 - **Exit codes:** `0` on review-ready or no-op, `1` on gate-failed, `2` on preflight/arg failure, `3` on an unexpected fatal error or unrecognised outcome, `4` on verifier-failed, `5` on timed-out, `6` on campaign-failed, and `7` on budget-exhausted.
+- **Tree dependencies:** give every task a `--unit-id`, then declare each edge as `--depends-on CHILD=PARENT`. A dependent waits without holding a concurrency slot and starts from the successful predecessor's result branch. `no-op` releases dependents; gate, timeout, verifier, and internal failures skip them transitively. Fan-in is rejected.
 - When verification runs, the correctness text stays in `verifierFindings`; the intent pass is kept separately in `intentVerifierFindings` and its own report section. The overall verdict is `NO_BLOCKERS` only when both passes are clean.
 - The Cursor verifier binary is `agent` (the Cursor Agent CLI).
 

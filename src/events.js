@@ -20,6 +20,9 @@ export const EVENT_TYPES = Object.freeze([
   'verdict',
   'stalled',
   'not_dispatched',
+  'waiting',
+  'released',
+  'skipped',
 ]);
 
 export const UNIT_KINDS = Object.freeze(['candidate', 'node', 'merge']);
@@ -35,6 +38,9 @@ export const EVENT_PAIRS = Object.freeze([
   'unit/start',
   'unit/finish',
   'unit/not_dispatched',
+  'unit/waiting',
+  'unit/released',
+  'unit/skipped',
   'isolate/start',
   'isolate/finish',
   'isolate/stalled',
@@ -278,6 +284,18 @@ function detailFor(event) {
   if (event.stage === 'unit') {
     if (event.type === 'not_dispatched') {
       return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} not-dispatched reason=${oneLine(event.reason)}`;
+    }
+    if (event.type === 'waiting') {
+      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} waiting on predecessor=${oneLine(event.predecessorUnitId)}`;
+    }
+    if (event.type === 'released') {
+      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} released by predecessor=${oneLine(event.predecessorUnitId)}`
+        + ` base=${oneLine(event.baseRef)}`;
+    }
+    if (event.type === 'skipped') {
+      return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} skipped reason=${oneLine(event.reason)}`
+        + ` predecessor=${oneLine(event.predecessorUnitId)}`
+        + ` blocked-by=${oneLine(event.blockedByUnitId)}/${oneLine(event.blockedByOutcome)}`;
     }
     return `unit=${oneLine(event.unitId)} kind=${oneLine(event.unitKind)} ${event.type}`
       + (event.outcome ? ` outcome=${oneLine(event.outcome)}` : '');
