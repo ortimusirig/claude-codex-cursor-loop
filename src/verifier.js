@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { spawnCapture } from './spawn.js';
 import { reportEvent } from './events.js';
 import { normalizeCursorUsage } from './usage.js';
@@ -7,14 +8,16 @@ export const DEFAULT_VERIFIER_MODEL = 'cursor-grok-4.5-high';
 
 const FORBIDDEN = ['--force', '--yolo', '-f', '--approve-mcps'];
 
+export const VERIFIER_PLUGIN_DIR = fileURLToPath(new URL('../cursor-plugin', import.meta.url));
+
 export function assertNoForbiddenFlags(args) {
   for (const f of FORBIDDEN) {
     if (args.includes(f)) throw new Error(`forbidden verifier flag: ${f}`);
   }
 }
 
-export const DEFAULT_PROMPT = 'Read the file CHANGES.diff in the current directory and review that change for correctness and obvious bugs. If there are no blocking problems, make your final line exactly NO_BLOCKERS. Otherwise briefly list the problems and make your final line exactly ISSUES.';
-export const INTENT_PROMPT = 'Read TASK.md and CHANGES.diff in the current directory and audit the change against two questions: Does the diff do everything TASK.md asked, without silently narrowing, dropping, or reinterpreting any requirement? For each new or changed test assertion in the diff, would that assertion still pass if the feature under test were broken? If neither question reveals a blocking problem, make your final line exactly NO_BLOCKERS. Otherwise briefly list the problems and make your final line exactly ISSUES.';
+export const DEFAULT_PROMPT = '/ccc-verify Read CHANGES.diff and judge the change for correctness and blocking bugs; make the final line exactly NO_BLOCKERS or exactly ISSUES.';
+export const INTENT_PROMPT = '/ccc-verify Read TASK.md and CHANGES.diff and judge whether the diff fully implements every TASK.md requirement and whether new or changed assertions detect broken behavior; make the final line exactly NO_BLOCKERS or exactly ISSUES.';
 
 export function assertUsablePrompt(prompt) {
   if (prompt.includes('"')) throw new Error('verifier prompt must not contain a double quote');
@@ -28,7 +31,10 @@ export function buildCursorArgs({ model = DEFAULT_VERIFIER_MODEL, prompt = DEFAU
   // it the agent exits 1 with no output and every review defaults to fail-safe ISSUES. It is
   // NOT one of the forbidden flags (--force/--yolo/-f/--approve-mcps auto-APPROVE actions);
   // --mode plan keeps the agent read-only regardless. Verified live (exit 0, NO_BLOCKERS).
-  const args = ['-p', prompt, '--output-format', 'stream-json', '--mode', 'plan', '--trust', '--model', model];
+  const args = [
+    '-p', prompt, '--output-format', 'stream-json', '--mode', 'plan', '--trust',
+    '--plugin-dir', VERIFIER_PLUGIN_DIR, '--model', model,
+  ];
   assertNoForbiddenFlags(args);
   return args;
 }

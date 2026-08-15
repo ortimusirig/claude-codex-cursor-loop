@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertNoForbiddenFlags,
@@ -16,6 +19,7 @@ import {
   FINDINGS_LIMIT,
   INTENT_PROMPT,
   PLAN_LIMIT,
+  VERIFIER_PLUGIN_DIR,
 } from '../src/verifier.js';
 import { EMPTY_USAGE } from '../src/usage.js';
 
@@ -23,6 +27,8 @@ const fakeAgent = fileURLToPath(new URL('../fixtures/fake-agent.mjs', import.met
 const brokenFakeAgent = fileURLToPath(new URL('../fixtures/fake-agent-broken.mjs', import.meta.url));
 const realSamplePath = fileURLToPath(new URL('../fixtures/cursor-stream-schema-sample.ndjson', import.meta.url));
 const planSamplePath = fileURLToPath(new URL('../fixtures/cursor-plan-mode-sample.ndjson', import.meta.url));
+const fixturesDir = fileURLToPath(new URL('../fixtures/', import.meta.url));
+const expectedPluginDir = fileURLToPath(new URL('../cursor-plugin', import.meta.url));
 
 function rewriteEvents(streamText, rewrite) {
   return streamText.trim().split(/\r?\n/)
@@ -95,15 +101,65 @@ test('assertUsablePrompt accepts a usable prompt', () => {
   assert.doesNotThrow(() => assertUsablePrompt('review the diff'));
 });
 
-test('intent prompt is usable, asks both audit questions, and stays read-only', () => {
-  assert.doesNotThrow(() => assertUsablePrompt(INTENT_PROMPT));
-  assert.match(INTENT_PROMPT, /everything TASK[.]md asked/);
-  assert.match(INTENT_PROMPT, /would that assertion still pass if the feature under test were broken/);
-  assert.doesNotMatch(INTENT_PROMPT, /["\r\n]/);
-  const args = buildCursorArgs({ prompt: INTENT_PROMPT });
-  assertNoForbiddenFlags(args);
-  assert.equal(args[args.indexOf('--mode') + 1], 'plan');
-  assert.ok(args.includes('--trust'));
+test('both prompts are usable skill pointers with self-sufficient verdict contracts', () => {
+  for (const prompt of [DEFAULT_PROMPT, INTENT_PROMPT]) {
+    assert.doesNotThrow(() => assertUsablePrompt(prompt));
+    assert.match(prompt, /^\/ccc-verify\b/, 'the prompt must explicitly select the shipped skill');
+    assert.match(prompt, /final line exactly NO_BLOCKERS or exactly ISSUES/,
+      'the prompt must retain the verdict contract if skill loading fails');
+    assert.doesNotMatch(prompt, /["\r\n]/);
+  }
+  assert.match(DEFAULT_PROMPT, /Read CHANGES[.]diff/);
+  assert.match(DEFAULT_PROMPT, /correctness and blocking bugs/);
+  assert.match(INTENT_PROMPT, /Read TASK[.]md and CHANGES[.]diff/);
+  assert.match(INTENT_PROMPT, /fully implements every TASK[.]md requirement/);
+  assert.match(INTENT_PROMPT, /assertions detect broken behavior/);
+});
+
+// Asserting VERIFIER_PLUGIN_DIR equals repoRoot/cursor-plugin proves nothing while the
+// suite runs from the repository root, because a broken join(process.cwd(), 'cursor-plugin')
+// yields exactly the same string. Resolve it from a DIFFERENT working directory, where the
+// two implementations disagree, so the assertion can actually fail.
+test('the plugin path is resolved from the module, not the working directory', async () => {
+  const verifierUrl = new URL('../src/verifier.js', import.meta.url).href;
+  const elsewhere = mkdtempSync(join(tmpdir(), 'cwd-'));
+  try {
+    const r = spawnSync(process.execPath, [
+      '--input-type=module', '-e',
+      `import { VERIFIER_PLUGIN_DIR } from ${JSON.stringify(verifierUrl)};`
+      + ' process.stdout.write(VERIFIER_PLUGIN_DIR);',
+    ], { cwd: elsewhere, encoding: 'utf8' });
+
+    assert.equal(r.status, 0, `resolving the plugin dir failed: ${r.stderr}`);
+    assert.equal(r.stdout, expectedPluginDir,
+      'the plugin path must resolve from verifier.js, not from process.cwd()');
+    assert.notEqual(r.stdout, join(elsewhere, 'cursor-plugin'),
+      'a cwd-derived implementation must fail this test');
+  } finally {
+    rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
+
+test('correctness and intent launches load the plugin and remain read-only', async () => {
+
+  for (const [pass, prompt] of [['correctness', DEFAULT_PROMPT], ['intent', INTENT_PROMPT]]) {
+    const events = [];
+    await runVerifier({
+      cwd: fixturesDir,
+      bin: process.execPath,
+      extraArgv: [fakeAgent, 'clean'],
+      prompt,
+      pass,
+      runId: `plugin-launch-${pass}`,
+      reporter: (event) => events.push(event),
+    });
+    const args = events.find((event) => event.stage === 'verify' && event.type === 'start')?.args;
+    assert.ok(args, `${pass} launch must report its combined argv`);
+    assert.equal(args[args.indexOf('--plugin-dir') + 1], expectedPluginDir);
+    assert.equal(args[args.indexOf('--mode') + 1], 'plan');
+    assert.ok(args.includes('--trust'));
+    assertNoForbiddenFlags(args);
+  }
 });
 
 test('assertUsablePrompt rejects double quotes', () => {

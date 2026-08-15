@@ -22,7 +22,7 @@ const SRC = dirname(fileURLToPath(import.meta.url));
 // README.md is the CLI reference — both belong where the skill is actually invoked.
 // The missing-source guard below checks only entries that are listed here; it cannot
 // detect an existing top-level entry silently omitted from this array.
-const PAYLOAD = ['package.json', 'SKILL.md', 'README.md', 'LICENSE', 'PORTING.md', 'diag.mjs', 'bin', 'src', 'fixtures', 'test', 'docs'];
+const PAYLOAD = ['package.json', 'SKILL.md', 'README.md', 'LICENSE', 'PORTING.md', 'diag.mjs', 'bin', 'src', 'fixtures', 'test', 'docs', 'cursor-plugin'];
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');

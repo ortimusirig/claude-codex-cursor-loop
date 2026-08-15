@@ -116,6 +116,8 @@ When verification runs, Cursor gets separate correctness and intent/assertion-au
 The correctness review stays in `verifierFindings`; the intent review is retained separately
 in `intentVerifierFindings`. Both are printed in `ccc-report.md`, and the overall verdict is
 clean only when both passes return `NO_BLOCKERS`.
+Both turns select the shipped `/ccc-verify` skill through `--plugin-dir`; each one-line prompt
+still states its files, audit, and verdict contract if skill loading fails.
 
 ### Iterating
 
