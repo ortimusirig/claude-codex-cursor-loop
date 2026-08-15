@@ -88,6 +88,38 @@
       "idx": 10,
       "width": 260,
       "faceted": false
+    },
+    {
+      "id": "ccc-campaign-id",
+      "name": "Campaign",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.campaignId || \"\") }; }",
+      "idx": 11,
+      "width": 230,
+      "faceted": true
+    },
+    {
+      "id": "ccc-round",
+      "name": "Round",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: event.round === undefined ? \"\" : String(event.round) }; }",
+      "idx": 12,
+      "width": 70,
+      "faceted": true
+    },
+    {
+      "id": "ccc-unit-id",
+      "name": "Unit",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.unitId || \"\") }; }",
+      "idx": 13,
+      "width": 230,
+      "faceted": true
+    },
+    {
+      "id": "ccc-unit-kind",
+      "name": "Kind",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.unitKind || \"\") }; }",
+      "idx": 14,
+      "width": 100,
+      "faceted": true
     }
   ],
   "settings": {

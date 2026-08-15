@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // bin/loop.js
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseArgs } from '../src/args.js';
 import { preflight } from '../src/preflight.js';
 import { run } from '../src/run.js';
+import { CAMPAIGN_EVENTS_FILENAME, runCampaign } from '../src/campaign.js';
 import { exitCodeFor } from '../src/exit.js';
 import { formatEventSummary } from '../src/events.js';
 import { formatRunStatus, readRunStatus } from '../src/status.js';
@@ -70,10 +71,49 @@ async function main() {
     }
     return;
   }
-  const pf = await preflight({ task: opts.task, target: opts.target, gate: opts.gate, scratchRoot: SCRATCH_ROOT });
+  const pf = await preflight({
+    task: opts.command === 'run' ? opts.task : undefined,
+    tasks: opts.command === 'batch' ? opts.tasks.map((unit) => unit.task) : undefined,
+    target: opts.target,
+    gate: opts.gate,
+    scratchRoot: SCRATCH_ROOT,
+  });
   if (!pf.ok) {
     process.stderr.write(`preflight failed: ${pf.reason}\n`);
     process.exit(2);
+  }
+  if (opts.command === 'batch') {
+    const campaignId = `campaign-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+    const campaignDirectory = join(SCRATCH_ROOT, campaignId);
+    const campaignEventsPath = join(campaignDirectory, CAMPAIGN_EVENTS_FILENAME);
+    mkdirSync(campaignDirectory, { recursive: true });
+    const campaignReporter = createCliReporter({
+      eventsPath: campaignEventsPath,
+      quiet: opts.quiet,
+    });
+    const aggregate = await runCampaign({
+      campaignId,
+      tasks: opts.tasks,
+      target: opts.target,
+      gate: opts.gate,
+      concurrency: opts.concurrency,
+      tokenBudget: opts.tokenBudget,
+      scratchRoot: SCRATCH_ROOT,
+      reporter: campaignReporter,
+      unitReporterFactory: ({ unitId }) => createCliReporter({
+        eventsPath: join(SCRATCH_ROOT, unitId, 'w', 'events.jsonl'),
+        quiet: opts.quiet,
+      }),
+      runOptions: {
+        gateRetries: opts.gateRetries,
+        executorModel: opts.executorModel,
+        executorEffort: opts.executorEffort,
+        verifierModel: opts.verifierModel,
+      },
+    });
+    aggregate.campaignEventsPath = campaignEventsPath;
+    process.stdout.write(`${JSON.stringify(aggregate, null, 2)}\n`);
+    process.exit(exitCodeFor(aggregate.rollup.outcome));
   }
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
   const eventsPath = join(SCRATCH_ROOT, runId, 'w', 'events.jsonl');

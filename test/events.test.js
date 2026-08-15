@@ -13,11 +13,15 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  assertEventConformance,
   createEvent,
+  EVENT_PAIRS,
+  EVENT_STAGES,
   formatEventSummary,
   MAX_EVENT_SUMMARY_LENGTH,
   reportEvent,
 } from '../src/events.js';
+import { runCampaign } from '../src/campaign.js';
 import { runExecutor as realExecutor } from '../src/executor.js';
 import { runGate as realGate } from '../src/gate.js';
 import { run } from '../src/run.js';
@@ -60,6 +64,26 @@ test('event construction protects the envelope and summaries stay bounded to one
   assert.ok(summary.length <= MAX_EVENT_SUMMARY_LENGTH);
   assert.doesNotMatch(summary, /[\r\n]/);
   assert.doesNotMatch(summary, /must never be rendered/);
+});
+
+test('event construction validates declared pairs and campaign identity vocabulary', () => {
+  assert.throws(() => createEvent({
+    runId: 'bad-pair', stage: 'campaign', type: 'file_change',
+  }), /unknown event pair/i);
+  assert.throws(() => createEvent({
+    runId: 'bad-kind', campaignId: 'campaign', round: 1,
+    unitId: 'unit', unitKind: 'planner', stage: 'unit', type: 'start',
+  }), /unit kind/i);
+  const event = createEvent({
+    runId: 'unit', campaignId: 'campaign', round: 1,
+    unitId: 'unit', unitKind: 'node', stage: 'unit', type: 'start',
+  });
+  assert.deepEqual({
+    campaignId: event.campaignId,
+    round: event.round,
+    unitId: event.unitId,
+    unitKind: event.unitKind,
+  }, { campaignId: 'campaign', round: 1, unitId: 'unit', unitKind: 'node' });
 });
 
 test('stage transitions and executor file changes reach the reporter in order', async () => {
@@ -249,4 +273,71 @@ test('reportEvent also swallows an asynchronous reporter rejection', async () =>
   reportEvent(async () => { throw new Error('async logging failure'); },
     'async-reporter', 'report', 'finish', { file: 'x' });
   await new Promise((resolve) => setImmediate(resolve));
+});
+
+test('fully exercised campaign emissions have set equality with the declared event vocabulary', async () => {
+  const scr = scratch();
+  const tgt = target();
+  const events = [];
+  try {
+    const result = await runCampaign({
+      campaignId: 'event-conformance',
+      tasks: [{ task: 'Write observed.txt.', unitKind: 'node', unitId: 'conformance-unit' }],
+      target: tgt,
+      gate: [{
+        bin: process.execPath,
+        args: ['-e', [
+          "const fs = require('node:fs');",
+          "if (fs.existsSync('.conformance-gate')) process.exit(0);",
+          "fs.writeFileSync('.conformance-gate', 'retry\\n');",
+          'process.exit(1);',
+        ].join('')],
+      }],
+      concurrency: 1,
+      tokenBudget: 1000,
+      scratchRoot: scr,
+      reporter: (event) => events.push(event),
+      unitReporterFactory: () => (event) => events.push(event),
+      runOptions: {
+        gateRetries: 1,
+        adapters: {
+          runExecutor: (opts) => realExecutor({
+            ...opts, bin: process.execPath, extraArgv: [fakeWriter],
+          }),
+          runGate: realGate,
+          runVerifier: (opts) => realVerifier({
+            ...opts, bin: process.execPath, extraArgv: [fakeAgent, 'clean'],
+          }),
+        },
+      },
+    });
+    assert.equal(result.rollup.outcome, 'review-ready');
+
+    const UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN = [
+      // The budget is deliberately ample, so every planned unit dispatches.
+      'unit/not_dispatched',
+      // Each watchdog pair needs a real period of silence longer than its threshold. Injecting
+      // those gaps would turn this healthy, fully exercised retry path into timeout scenarios.
+      'isolate/stalled',
+      'executor/stalled',
+      'gate/stalled',
+      'diff/stalled',
+      'verify/stalled',
+      'report/stalled',
+    ];
+    assert.doesNotThrow(() => assertEventConformance(events, {
+      allowUnemitted: UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN,
+    }));
+
+    // Demonstrate the ratchet firing: this temporary declaration has no emitter in the
+    // exercised campaign, so equality must reject it as missing.
+    assert.throws(() => assertEventConformance(events, {
+      declaredStages: [...EVENT_STAGES, 'planner'],
+      declaredPairs: [...EVENT_PAIRS, 'planner/start'],
+      allowUnemitted: UNEMITTED_IN_HEALTHY_RETRY_CAMPAIGN,
+    }), /missing:.*planner\/start/);
+  } finally {
+    rmSync(tgt, { recursive: true, force: true });
+    rmSync(scr, { recursive: true, force: true });
+  }
 });

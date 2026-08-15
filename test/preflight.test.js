@@ -44,3 +44,18 @@ test('fails before binary probes when a path-like task file is missing', async (
   assert.match(r.reason, /task file not found/i);
   assert.ok(r.reason.includes(missing), 'the diagnostic must name the missing task path');
 });
+
+test('batch preflight validates every task before probing binaries', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'p-'));
+  const missing = join(d, 'second-plan.txt');
+  writeFileSync(join(d, 'gate.json'), '[]');
+  const r = await preflight({
+    tasks: ['Valid inline plan prose.', missing],
+    target: d,
+    gate: join(d, 'gate.json'),
+    scratchRoot: 'C:/ccc/w',
+    bins: { git: 'not-needed', codex: 'not-needed', agent: 'not-needed' },
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.reason.includes(missing));
+});

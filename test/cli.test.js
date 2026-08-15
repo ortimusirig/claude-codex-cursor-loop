@@ -144,3 +144,50 @@ test('--quiet suppresses stderr heartbeats but still writes events.jsonl', async
     rmSync(fixture.scratchRoot, { recursive: true, force: true });
   }
 });
+
+test('batch stdout is one aggregate JSON document while heartbeats remain on stderr', async () => {
+  const fixture = cliFixture();
+  const batchArgs = [
+    cli,
+    'batch',
+    '--task', 'Make no real change for candidate one.',
+    '--task', 'Make no real change for candidate two.',
+    '--target', fixture.args[fixture.args.indexOf('--target') + 1],
+    '--gate', fixture.args[fixture.args.indexOf('--gate') + 1],
+    '--gate-retries', '0',
+    '--concurrency', '2',
+    '--token-budget', '1000',
+  ];
+  try {
+    const r = await spawnCapture(process.execPath, batchArgs, { env: fixture.env });
+    assert.equal(r.code, 0, r.stderr);
+    const aggregate = JSON.parse(r.stdout);
+    assert.equal(r.stdout, `${JSON.stringify(aggregate, null, 2)}\n`,
+      'stdout must contain exactly one formatted campaign aggregate');
+    assert.equal(aggregate.units.length, 2);
+    assert.equal(aggregate.rollup.counts.completed, 2);
+    assert.match(r.stderr, /^\[ccc\].*campaign\/start/m,
+      'positive control: campaign heartbeat must actually be emitted');
+    assert.match(r.stderr, /^\[ccc\].*executor\/file_change/m,
+      'positive control: concurrent unit heartbeats must actually be emitted');
+
+    const campaignLines = readFileSync(aggregate.campaignEventsPath, 'utf8')
+      .trim().split(/\r?\n/);
+    assert.ok(campaignLines.length >= 8);
+    const campaignEvents = campaignLines.map((line, index) => {
+      assert.doesNotThrow(() => JSON.parse(line), `campaign event line ${index + 1}`);
+      return JSON.parse(line);
+    });
+    assert.ok(campaignEvents.every((event) => event.campaignId === aggregate.campaignId));
+    for (const unit of aggregate.units) {
+      const unitEvents = readFileSync(join(unit.facts.dir, 'events.jsonl'), 'utf8')
+        .trim().split(/\r?\n/).map(JSON.parse);
+      assert.ok(unitEvents.length > 0);
+      assert.ok(unitEvents.every((event) => event.unitId === unit.unitId));
+      assert.ok(unitEvents.every((event) => event.campaignId === aggregate.campaignId));
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.scratchRoot, { recursive: true, force: true });
+  }
+});

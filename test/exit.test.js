@@ -27,3 +27,8 @@ test('an unknown outcome is not treated as success', () => {
 test('timed-out is explicitly mapped to a non-zero exit', () => {
   assert.equal(exitCodeFor('timed-out'), 5);
 });
+
+test('campaign failure and budget exhaustion are explicit non-zero outcomes', () => {
+  assert.equal(exitCodeFor('campaign-failed'), 6);
+  assert.equal(exitCodeFor('budget-exhausted'), 7);
+});

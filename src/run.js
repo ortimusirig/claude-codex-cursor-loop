@@ -31,6 +31,7 @@ export const HARNESS_ARTIFACTS = Object.freeze([
   'ccc-report.md',
   'ccc-runfacts.json',
   'events.jsonl',
+  'campaign-events.jsonl',
 ]);
 
 export async function diffText(dir) {

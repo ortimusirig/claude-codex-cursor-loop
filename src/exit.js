@@ -10,6 +10,8 @@ export const EXIT_BY_OUTCOME = {
   'gate-failed': 1,
   'verifier-failed': 4,
   'timed-out': 5,
+  'campaign-failed': 6,
+  'budget-exhausted': 7,
 };
 
 // An unrecognised outcome is not a success. Defaulting to 0 here would recreate

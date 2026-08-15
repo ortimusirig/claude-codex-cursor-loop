@@ -79,3 +79,52 @@ test('parses dashboard run, scratch-root, and port forms without ambiguity', () 
 test('rejects a missing required option', () => {
   assert.throws(() => parseArgs(['run', '--task', 'p']), /--target/);
 });
+
+test('parses repeated batch plans with bounded concurrency, budget, and unit identity', () => {
+  const parsed = parseArgs([
+    'batch',
+    '--task', 'candidate-a.md',
+    '--task', 'candidate-b.md',
+    '--target', 'C:/proj',
+    '--gate', 'gate.json',
+    '--concurrency', '2',
+    '--token-budget', '9000',
+    '--unit-kind', 'candidate',
+    '--unit-kind', 'merge',
+    '--quiet',
+  ]);
+  assert.equal(parsed.command, 'batch');
+  assert.deepEqual(parsed.tasks, [
+    { task: 'candidate-a.md', unitKind: 'candidate' },
+    { task: 'candidate-b.md', unitKind: 'merge' },
+  ]);
+  assert.equal(parsed.concurrency, 2);
+  assert.equal(parsed.tokenBudget, 9000);
+  assert.equal(parsed.gateRetries, 2);
+  assert.equal(parsed.quiet, true);
+});
+
+test('batch defaults concurrency to two and broadcasts the candidate unit kind', () => {
+  const parsed = parseArgs([
+    'batch', '--task', 'a', '--task', 'b', '--target', 't', '--gate', 'g',
+  ]);
+  assert.equal(parsed.concurrency, 2);
+  assert.ok(parsed.tokenBudget > 0);
+  assert.deepEqual(parsed.tasks.map((unit) => unit.unitKind), ['candidate', 'candidate']);
+});
+
+test('batch rejects unsafe fan-out, bad kinds, and mismatched per-task kinds', () => {
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--target', 't', '--gate', 'g', '--concurrency', '17',
+  ]), /range/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--target', 't', '--gate', 'g', '--concurrency', '2.5',
+  ]), /range/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--target', 't', '--gate', 'g', '--unit-kind', 'planner',
+  ]), /unit-kind.*planner/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--task', 'b', '--task', 'c', '--target', 't', '--gate', 'g',
+    '--unit-kind', 'candidate', '--unit-kind', 'node',
+  ]), /once.*all.*once per/i);
+});

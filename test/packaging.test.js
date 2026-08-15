@@ -83,7 +83,10 @@ test('the optional Logdy layout is valid JSON with explicit event columns', () =
   const config = JSON.parse(readFileSync(logdyConfigPath, 'utf8'));
   assert.equal(config.name, 'ccc-run-events');
   const names = config.columns.map((column) => column.name);
-  for (const name of ['Time', 'Run', 'Stage', 'Type', 'File', 'Command', 'Code', 'Verdict']) {
+  for (const name of [
+    'Time', 'Run', 'Stage', 'Type', 'File', 'Command', 'Code', 'Verdict',
+    'Campaign', 'Round', 'Unit', 'Kind',
+  ]) {
     assert.ok(names.includes(name), `missing Logdy column: ${name}`);
   }
   assert.ok(config.columns.every((column) => typeof column.handlerTsCode === 'string'));
