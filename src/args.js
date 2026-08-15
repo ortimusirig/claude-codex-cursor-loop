@@ -12,6 +12,39 @@ export function parseArgs(argv) {
     }
     return { command, runDirectory: argv[1] };
   }
+  if (command === 'dashboard') {
+    const { values, positionals } = nodeParseArgs({
+      args: argv.slice(1),
+      options: {
+        port: { type: 'string' },
+        run: { type: 'string' },
+        'scratch-root': { type: 'string' },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+    if (positionals.length > 1) {
+      throw new Error('usage: dashboard [run-directory] [--scratch-root <directory>] [--port <port>]');
+    }
+    if (positionals[0] && values.run) {
+      throw new Error('dashboard run directory must be positional or --run, not both');
+    }
+    const runDirectory = values.run ?? positionals[0];
+    if (runDirectory && values['scratch-root']) {
+      throw new Error('dashboard accepts either a run directory or --scratch-root, not both');
+    }
+    const parsed = { command };
+    if (runDirectory) parsed.runDirectory = runDirectory;
+    if (values['scratch-root']) parsed.scratchRoot = values['scratch-root'];
+    if (values.port !== undefined) {
+      const port = Number(values.port);
+      if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
+        throw new Error(`invalid dashboard port: ${values.port}; expected an integer from 0 to 65535`);
+      }
+      parsed.port = port;
+    }
+    return parsed;
+  }
   if (command !== 'run') throw new Error(`unknown command: ${command ?? '(none)'}`);
   const { values } = nodeParseArgs({
     args: argv.slice(1),

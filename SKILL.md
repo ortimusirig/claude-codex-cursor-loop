@@ -42,6 +42,10 @@ On a roughly 30-minute cadence, the controller reads `loop status <run-directory
 The cadence is controller behaviour. Nothing in this package schedules it, and the package
 never contacts a human.
 
+For a human-readable live view, `loop dashboard <run-directory>` serves one run, while
+`loop dashboard --scratch-root <directory>` lays campaign runs out side by side. The
+dashboard is an optional localhost-only, read-only observer; a run never depends on it.
+
 ## Iterating
 
 Each `loop run` invocation performs **one pass** (Codex writes → gate → optional Cursor verify → report). Iteration is **controller-driven**: review the report, author a correction plan, and invoke `loop run` again for the next pass.

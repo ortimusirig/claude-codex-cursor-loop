@@ -53,6 +53,23 @@ async function main() {
     process.stdout.write(formatRunStatus(readRunStatus(opts.runDirectory)));
     return;
   }
+  if (opts.command === 'dashboard') {
+    // Keep the dashboard entirely out of the run path: its server and file polling code
+    // are not even loaded unless this separate command was selected.
+    const { startDashboard } = await import('../src/dashboard.js');
+    try {
+      const dashboard = await startDashboard({
+        runDirectory: opts.runDirectory,
+        scratchRoot: opts.scratchRoot ?? (opts.runDirectory ? undefined : SCRATCH_ROOT),
+        port: opts.port,
+      });
+      process.stdout.write(`${dashboard.url}\n`);
+    } catch (error) {
+      process.stderr.write(`dashboard failed: ${error.message}\n`);
+      process.exit(2);
+    }
+    return;
+  }
   const pf = await preflight({ task: opts.task, target: opts.target, gate: opts.gate, scratchRoot: SCRATCH_ROOT });
   if (!pf.ok) {
     process.stderr.write(`preflight failed: ${pf.reason}\n`);

@@ -1,0 +1,329 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { get } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { startDashboard } from '../src/dashboard.js';
+import { spawnCapture } from '../src/spawn.js';
+
+const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
+
+function event(runId, stage, type, fields = {}) {
+  return { ts: new Date().toISOString(), runId, stage, type, ...fields };
+}
+
+function makeRun(root, runId, events, suffix = '') {
+  const directory = join(root, runId);
+  const work = join(directory, 'w');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(work, 'events.jsonl'), `${events.map(JSON.stringify).join('\n')}`
+    + (events.length > 0 ? '\n' : '') + suffix);
+  return { directory, work, eventsPath: join(work, 'events.jsonl') };
+}
+
+async function page(dashboard) {
+  const response = await fetch(dashboard.url);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /^text\/html/);
+  return response.text();
+}
+
+async function openSse(url) {
+  return new Promise((resolve, reject) => {
+    const request = get(new URL('events', url), (response) => {
+      response.setEncoding('utf8');
+      let body = '';
+      const waiters = new Set();
+      response.on('data', (chunk) => {
+        body += chunk;
+        for (const waiter of waiters) {
+          if (waiter.pattern.test(body)) {
+            clearTimeout(waiter.timeout);
+            waiters.delete(waiter);
+            waiter.resolve(body);
+          }
+        }
+      });
+      response.on('error', reject);
+      resolve({
+        response,
+        request,
+        waitFor(pattern, timeoutMs = 4000) {
+          if (pattern.test(body)) return Promise.resolve(body);
+          return new Promise((accept, fail) => {
+            const waiter = { pattern, resolve: accept, timeout: null };
+            waiter.timeout = setTimeout(() => {
+              waiters.delete(waiter);
+              fail(new Error(`SSE did not contain ${pattern}; received ${body}`));
+            }, timeoutMs);
+            waiters.add(waiter);
+          });
+        },
+        close() {
+          response.destroy();
+          request.destroy();
+        },
+      });
+    });
+    request.once('error', reject);
+  });
+}
+
+function snapshotContents(directory) {
+  const rows = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(current, entry.name);
+      const name = relative(directory, path).split(sep).join('/');
+      if (entry.isDirectory()) {
+        rows.push({ name: `${name}/`, kind: 'directory' });
+        walk(path);
+      } else {
+        const content = readFileSync(path);
+        rows.push({
+          name,
+          kind: 'file',
+          bytes: content.length,
+          sha256: createHash('sha256').update(content).digest('hex'),
+          mtimeMs: statSync(path).mtimeMs,
+        });
+      }
+    }
+  };
+  walk(directory);
+  return rows;
+}
+
+test('dashboard starts on loopback, serves one self-contained page, and shows current stage', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-page-'));
+  const runId = 'run-current-stage';
+  const run = makeRun(root, runId, [event(runId, 'executor', 'start', { attempt: 1 })]);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ runDirectory: run.directory, port: 0 });
+    assert.equal(dashboard.host, '127.0.0.1');
+    assert.match(dashboard.url, /^http:\/\/127[.]0[.]0[.]1:\d+\/$/);
+    const html = await page(dashboard);
+    assert.match(html, /CCC live run dashboard/);
+    assert.match(html, /Current stage<\/span><strong>executor<\/strong>/,
+      'the served document itself must carry the current stage');
+    assert.match(html, /new EventSource\('\/events'\)/);
+    assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/i,
+      'the page must make no external asset requests');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an event appended after SSE connects is delivered without a reload', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-sse-'));
+  const runId = 'run-live-append';
+  const run = makeRun(root, runId, [event(runId, 'executor', 'start', { attempt: 1 })]);
+  let dashboard;
+  let stream;
+  try {
+    dashboard = await startDashboard({ runDirectory: run.directory, port: 0, pollIntervalMs: 25 });
+    stream = await openSse(dashboard.url);
+    await stream.waitFor(/event: snapshot/);
+    appendFileSync(run.eventsPath, `${JSON.stringify(event(runId, 'executor', 'file_change', {
+      file: 'src/arrived-live.js', attempt: 2,
+    }))}\n`);
+    const delivered = await stream.waitFor(/src\/arrived-live[.]js/);
+    assert.match(delivered, /attempt 2/,
+      'the live payload must include the executor attempt, not only the file name');
+  } finally {
+    stream?.close();
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a final event truncated mid-write is ignored and does not crash the server', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-partial-'));
+  const runId = 'run-partial';
+  const run = makeRun(root, runId, [event(runId, 'gate', 'start', { attempt: 1 })],
+    '{"ts":"2026-08-15T00:00:00.000Z","runId":"run-partial","stage":"executor","type":"file_change","file":"HALF_RECORD');
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ runDirectory: run.directory, port: 0, pollIntervalMs: 25 });
+    const first = await page(dashboard);
+    assert.match(first, /Current stage<\/span><strong>gate<\/strong>/);
+    assert.doesNotMatch(first, /HALF_RECORD/, 'partial JSON must never reach rendered output');
+    const second = await page(dashboard);
+    assert.doesNotMatch(second, /Read error|HALF_RECORD/,
+      'a repeated read proves the server remained healthy');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing not-yet-created run directory is a clear waiting state and is not created', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-missing-'));
+  const missing = join(root, 'future-run');
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ runDirectory: missing, port: 0 });
+    const html = await page(dashboard);
+    assert.match(html, /Run directory does not exist yet/);
+    assert.match(html, /not started/);
+    assert.equal(existsSync(missing), false, 'observing a future run must not create it');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('scratch-root mode represents several runs side by side', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-campaign-'));
+  makeRun(root, 'campaign-run-a', [event('campaign-run-a', 'executor', 'start')]);
+  makeRun(root, 'campaign-run-b', [event('campaign-run-b', 'gate', 'finish', { verdict: 'passed' })]);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
+    const html = await page(dashboard);
+    assert.match(html, /data-run-id="campaign-run-a"/);
+    assert.match(html, /data-run-id="campaign-run-b"/);
+    assert.match(html, /<main id="runs">[\s\S]*campaign-run-a[\s\S]*campaign-run-b/);
+    assert.match(html, /main\{display:flex/,
+      'campaign cards must use a horizontal side-by-side layout');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verdictSource none is visibly distinct from a reviewer's genuine ISSUES", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-verdict-'));
+  const runId = 'run-verdict-source';
+  const run = makeRun(root, runId, [
+    event(runId, 'verify', 'finish', {
+      pass: 'correctness', verdict: 'ISSUES', source: 'none', tokens: { inputTokens: 11 },
+    }),
+    event(runId, 'verify', 'finish', {
+      pass: 'intent', verdict: 'ISSUES', source: 'assistant', tokens: { outputTokens: 7 },
+    }),
+  ]);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ runDirectory: run.directory, port: 0 });
+    const html = await page(dashboard);
+    assert.match(html, /data-verdict-kind="fail-safe"[\s\S]*verdictSource: none[\s\S]*ISSUES is a fail-safe, not a reviewer finding/);
+    assert.match(html, /data-verdict-kind="reviewer"[\s\S]*verdictSource: assistant[\s\S]*Reviewer reported ISSUES/);
+    assert.match(html, /Correctness[\s\S]*in 11/);
+    assert.match(html, /Intent[\s\S]*out 7/);
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the run card renders completion, ordered stages, gate exits, seat tokens, and stalls', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-details-'));
+  const runId = 'run-full-details';
+  const run = makeRun(root, runId, [
+    event(runId, 'executor', 'finish', {
+      attempt: 1, code: 0, tokens: { inputTokens: 20, outputTokens: 4 },
+    }),
+    event(runId, 'executor', 'file_change', { file: 'src/detail.js', attempt: 1 }),
+    event(runId, 'gate', 'gate_command', {
+      bin: 'node', args: ['--test', 'test/detail.test.js'], code: 7, attempt: 1,
+    }),
+    event(runId, 'executor', 'stalled', {
+      gapMs: 61000, lastEvent: { stage: 'gate', type: 'gate_command' },
+    }),
+    event(runId, 'verify', 'finish', {
+      pass: 'correctness', verdict: 'NO_BLOCKERS', source: 'result',
+      tokens: { cachedInputTokens: 3, reasoningOutputTokens: 2 },
+    }),
+    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
+  ]);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ runDirectory: run.directory, port: 0 });
+    const html = await page(dashboard);
+    assert.match(html, /class="state finished">Finished/,
+      'report/finish must turn the card into an explicit finished state');
+    assert.match(html, /src\/detail[.]js<\/code><span>attempt 1/);
+    assert.match(html, /node --test test\/detail[.]test[.]js<\/code><span class="exit-fail">exit 7/);
+    assert.match(html, /Executor<\/dt><dd>in 20 · cached 0 · out 4/);
+    assert.match(html, /Correctness<\/dt><dd>in 0 · cached 3 · out 0 · reasoning 2/);
+    assert.match(html, /<strong>STALL<\/strong><span>1m 1s after gate\/gate_command/);
+    const timeline = html.slice(html.indexOf('Full stage timeline'));
+    const orderedStages = ['executor</b><span>finish', 'executor</b><span>file_change',
+      'gate</b><span>gate_command', 'executor</b><span>stalled',
+      'verify</b><span>finish', 'report</b><span>finish'];
+    let cursor = -1;
+    for (const stage of orderedStages) {
+      const next = timeline.indexOf(stage, cursor + 1);
+      assert.ok(next > cursor, `timeline is missing or reordered at ${stage}`);
+      cursor = next;
+    }
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('dashboard serving and SSE observation leave every run byte unchanged', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-readonly-'));
+  const runId = 'run-readonly';
+  const run = makeRun(root, runId, [
+    event(runId, 'executor', 'file_change', { file: 'src/a.js', attempt: 1 }),
+    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
+  ], '{"unfinished":');
+  writeFileSync(join(run.work, 'operator-note.txt'), 'must remain byte-for-byte identical\n');
+  mkdirSync(join(run.work, 'nested'));
+  writeFileSync(join(run.work, 'nested', 'binary.bin'), Buffer.from([0, 1, 2, 255]));
+  const before = snapshotContents(run.directory);
+  let dashboard;
+  let stream;
+  try {
+    dashboard = await startDashboard({ runDirectory: run.directory, port: 0, pollIntervalMs: 25 });
+    const html = await page(dashboard);
+    assert.match(html, /class="state finished">Finished/);
+    stream = await openSse(dashboard.url);
+    await stream.waitFor(/event: snapshot/);
+  } finally {
+    stream?.close();
+    await dashboard?.close();
+  }
+  try {
+    assert.deepEqual(snapshotContents(run.directory), before,
+      'names, bytes, hashes, and mtimes must remain identical after HTTP and SSE reads');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the dashboard command reports an occupied fixed port instead of rebinding', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-port-'));
+  const run = makeRun(root, 'run-port', [event('run-port', 'isolate', 'start')]);
+  let occupying;
+  try {
+    occupying = await startDashboard({ runDirectory: run.directory, port: 0 });
+    const result = await spawnCapture(process.execPath, [
+      cli, 'dashboard', run.directory, '--port', String(occupying.port),
+    ]);
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '', 'a failed start must not print a misleading URL');
+    assert.match(result.stderr, new RegExp(`dashboard failed: port ${occupying.port} is already in use on localhost`));
+  } finally {
+    await occupying?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

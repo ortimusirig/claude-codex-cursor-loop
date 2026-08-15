@@ -63,6 +63,7 @@ to run side-by-side with an existing copy).
 ```
 node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--quiet]
 node bin/loop.js status <run-directory>
+node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 ```
 
 | Option | Required | Default | Range |
@@ -112,6 +113,19 @@ run-facts document; live event summaries use stderr.
 `w` directory or its parent run directory. It reads `events.jsonl`, tolerates a final line
 that is still being appended, and never writes to the run or signals its processes.
 
+`dashboard` serves the same event data as a live, side-by-side browser view. Pass a run
+directory for one card, `--scratch-root <directory>` for every run under a campaign root, or
+neither to use `CCC_SCRATCH_ROOT` and its platform default. It listens only on
+`127.0.0.1`, prints its URL on stdout, and uses fixed port `7331` unless `--port` is set. If
+that port is occupied it exits with an error; it never silently chooses another. The page,
+CSS, JavaScript, HTTP server, and server-sent event stream use only Node built-ins and make
+no external requests.
+
+The dashboard is a separate, strictly read-only observer. It tolerates a missing future run
+and an event record caught mid-append, and detects new runs and appended records while open.
+It never writes an artifact or signals a process, and `loop run` neither imports nor starts
+it.
+
 When verification runs, Cursor gets separate correctness and intent/assertion-audit turns.
 The correctness review stays in `verifierFindings`; the intent review is retained separately
 in `intentVerifierFindings`. Both are printed in `ccc-report.md`, and the overall verdict is
@@ -124,7 +138,7 @@ still states its files, audit, and verdict contract if skill loading fails.
 One `loop run` invocation performs one pass. Iteration is controller-driven: read the report,
 author a correction plan, and invoke `loop run` again for the next pass.
 
-### Optional live browser view with Logdy
+### Optional flat event view with Logdy
 
 [Logdy](https://logdy.dev/) is an optional, local operator tool: a single Apache-2.0 Go
 binary with an embedded web UI. The loop does not install, launch, import, or require it.

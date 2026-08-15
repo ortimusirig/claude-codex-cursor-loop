@@ -59,6 +59,23 @@ test('parses status with exactly one run directory', () => {
   assert.throws(() => parseArgs(['status', 'one', 'two']), /status <run-directory>/);
 });
 
+test('parses dashboard run, scratch-root, and port forms without ambiguity', () => {
+  assert.deepEqual(parseArgs(['dashboard', 'C:/ccc/w/a', '--port', '8123']), {
+    command: 'dashboard', runDirectory: 'C:/ccc/w/a', port: 8123,
+  });
+  assert.deepEqual(parseArgs(['dashboard', '--scratch-root', 'C:/ccc/w']), {
+    command: 'dashboard', scratchRoot: 'C:/ccc/w',
+  });
+  assert.deepEqual(parseArgs(['dashboard', '--run', 'C:/ccc/w/a']), {
+    command: 'dashboard', runDirectory: 'C:/ccc/w/a',
+  });
+  assert.deepEqual(parseArgs(['dashboard']), { command: 'dashboard' },
+    'no source means the CLI-configured default scratch root');
+  assert.throws(() => parseArgs(['dashboard', 'a', '--scratch-root', 'b']), /either.*run.*scratch/i);
+  assert.throws(() => parseArgs(['dashboard', '--port', '65536']), /port/i);
+  assert.throws(() => parseArgs(['dashboard', '--port', '12.5']), /port/i);
+});
+
 test('rejects a missing required option', () => {
   assert.throws(() => parseArgs(['run', '--task', 'p']), /--target/);
 });
