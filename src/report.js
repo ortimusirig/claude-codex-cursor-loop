@@ -29,6 +29,7 @@ export function buildRunFacts({
   intentVerifierConsistency = null,
   gateFailure = null,
   tokens = {},
+  usageConsistency = null,
   models = {},
   outcome,
   gateRetries,
@@ -77,6 +78,7 @@ export function buildRunFacts({
       verifier: addUsage(EMPTY_USAGE, tokens?.verifier),
       total: addUsage(EMPTY_USAGE, tokens?.total),
     },
+    usageConsistency: usageConsistency ?? null,
     outcome,
   };
   if (campaignId !== undefined) {
@@ -141,6 +143,8 @@ export function buildReportMarkdown(facts, {
 } = {}) {
   const last = facts.iterations.at(-1) ?? {};
   const configuredTimeouts = facts.limits?.timeoutsMs;
+  const usageDisagreements = (facts.usageConsistency?.checks ?? [])
+    .filter((check) => check.status === 'disagreement');
   const md = [
     `# CCC run ${facts.runId}`,
     ``,
@@ -150,6 +154,7 @@ export function buildReportMarkdown(facts, {
     `- **Intent verdict:** ${facts.intentVerdict ?? 'n/a'} (source: ${facts.intentVerdictSource ?? 'n/a'})`,
     `- **Verdict evidence consistency:** ${facts.verifierConsistency?.status ?? 'n/a'}`,
     `- **Intent evidence consistency:** ${facts.intentVerifierConsistency?.status ?? 'n/a'}`,
+    `- **Token accounting consistency:** ${facts.usageConsistency?.status ?? 'n/a'}`,
     `- **Base ref:** ${facts.baseRef}`,
     `- **Base commit:** ${facts.baseCommit}`,
     `- **Branch:** ${facts.branch}`,
@@ -195,6 +200,18 @@ export function buildReportMarkdown(facts, {
             + `${facts.intentVerifierConsistency.recordedSource}; re-derived `
             + `${facts.intentVerifierConsistency.rederivedVerdict}/`
             + `${facts.intentVerifierConsistency.rederivedSource} from retained evidence.`,
+        ]
+      : []),
+    ...(usageDisagreements.length > 0
+      ? [
+          ``,
+          `Token accounting bookkeeping disagreement: cached input exceeded total input. `
+            + usageDisagreements.map((check) => {
+              const location = [check.seat, check.pass, check.attempt === undefined
+                ? null : `attempt ${check.attempt}`].filter(Boolean).join('/');
+              return `${location || 'usage'} recorded input ${check.inputTokens}, `
+                + `cached input ${check.cachedInputTokens}`;
+            }).join('; ') + `.`,
         ]
       : []),
     ...(facts.verifierEvidence?.inputTruncated

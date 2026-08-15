@@ -1,6 +1,6 @@
 import { spawnCapture } from './spawn.js';
 import { reportEvent } from './events.js';
-import { EMPTY_USAGE, normalizeCodexUsage } from './usage.js';
+import { annotateUsageConsistency, EMPTY_USAGE, normalizeCodexUsage } from './usage.js';
 import { resolveStageTimeouts } from './timeouts.js';
 import { StringDecoder } from 'node:string_decoder';
 
@@ -149,14 +149,16 @@ export async function runExecutor({
   });
   observer?.finish();
   const parsed = parseCodexStream(r.stdout);
-  reportEvent(reporter, runId, 'executor', 'finish', {
-    code: r.code, tokens: parsed.usage, timedOut: r.timedOut, attempt,
-  });
-  return {
+  const result = annotateUsageConsistency({
     ...parsed,
     exitCode: r.code,
     timedOut: r.timedOut,
     ...(r.aborted ? { aborted: true } : {}),
     timeoutMs: r.timeoutMs,
-  };
+  });
+  reportEvent(reporter, runId, 'executor', 'finish', {
+    code: r.code, tokens: parsed.usage, timedOut: r.timedOut, attempt,
+    usageConsistency: result.usageConsistency.status,
+  });
+  return result;
 }

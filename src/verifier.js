@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { spawnCapture } from './spawn.js';
 import { reportEvent } from './events.js';
-import { normalizeCursorUsage } from './usage.js';
+import { annotateUsageConsistency, normalizeCursorUsage } from './usage.js';
 import { resolveStageTimeouts } from './timeouts.js';
 
 export const DEFAULT_VERIFIER_MODEL = 'cursor-grok-4.5-high';
@@ -344,7 +344,7 @@ export async function runVerifier({
         verdictEvidence: evidence,
         usage,
       };
-  const result = annotateVerifierConsistency(unannotatedResult);
+  const result = annotateVerifierConsistency(annotateUsageConsistency(unannotatedResult));
   reportEvent(reporter, runId, 'verify', 'finish', {
     code: exitCode,
     verdict,
@@ -353,6 +353,7 @@ export async function runVerifier({
     timedOut: r.timedOut,
     pass,
     verdictConsistency: result.verdictConsistency?.status ?? null,
+    usageConsistency: result.usageConsistency.status,
   });
   return result;
 }

@@ -13,6 +13,7 @@ import {
 } from '../src/executor.js';
 import {
   addUsage,
+  checkUsageConsistency,
   EMPTY_USAGE,
   normalizeCodexUsage,
   normalizeCursorUsage,
@@ -111,25 +112,31 @@ test('parseCodexStream handles the real wrapped item.completed schema, ignores e
 test('normalizeCodexUsage maps the real Codex usage object', () => {
   const stream = readFileSync(usageSamplePath, 'utf8');
   const raw = stream.trim().split(/\r?\n/).map(JSON.parse).at(-1).usage;
-  assert.deepEqual(normalizeCodexUsage(raw), {
+  const normalized = normalizeCodexUsage(raw);
+  assert.deepEqual(normalized, {
     inputTokens: 31116,
     cachedInputTokens: 26112,
     outputTokens: 96,
     reasoningOutputTokens: 45,
     cacheWriteTokens: 0,
   });
+  assert.equal(checkUsageConsistency(normalized).status, 'consistent');
 });
 
 test('normalizeCursorUsage maps the real Cursor usage object', () => {
   const stream = readFileSync(cursorPlanSamplePath, 'utf8');
   const raw = stream.trim().split(/\r?\n/).map(JSON.parse).find((event) => event.type === 'result').usage;
-  assert.deepEqual(normalizeCursorUsage(raw), {
-    inputTokens: 20111,
+  const normalized = normalizeCursorUsage(raw);
+  assert.deepEqual(normalized, {
+    inputTokens: 58639,
     cachedInputTokens: 38528,
     outputTokens: 1184,
     reasoningOutputTokens: 0,
     cacheWriteTokens: 0,
   });
+  assert.ok(normalized.cachedInputTokens <= normalized.inputTokens,
+    'the canonical cached portion must not exceed inclusive total input');
+  assert.equal(checkUsageConsistency(normalized).status, 'consistent');
 });
 
 test('usage normalizers return zero usage for missing or garbage input and sanitize invalid fields', () => {

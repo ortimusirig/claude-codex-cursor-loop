@@ -200,6 +200,56 @@ test('a retained-evidence disagreement is reported without failing a completed r
   }
 });
 
+test('a token invariant violation is reported without failing a completed run', async () => {
+  const scr = scratch();
+  const target = makeTarget();
+  try {
+    const facts = await run({
+      task: 'do the task', target, gate: [], gateRetries: 0,
+      scratchRoot: scr, runId: 'usage-disagreement',
+      adapters: {
+        runExecutor: async (opts) => {
+          await writingExecutor(opts);
+          return {
+            changedFiles: ['new.txt'],
+            lastMessage: 'wrote new.txt',
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 30,
+              outputTokens: 2,
+              reasoningOutputTokens: 0,
+              cacheWriteTokens: 0,
+            },
+          };
+        },
+        runGate: async () => ({ passed: true, results: [] }),
+        runVerifier: async () => ({
+          verdict: 'NO_BLOCKERS', launchFailed: false, usage: EMPTY_USAGE,
+        }),
+      },
+    });
+
+    assert.equal(facts.outcome, 'review-ready', 'accounting diagnostics must not fail the run');
+    assert.equal(facts.usageConsistency.status, 'disagreement');
+    const violation = facts.usageConsistency.checks.find((check) => (
+      check.seat === 'executor' && check.status === 'disagreement'
+    ));
+    assert.ok(violation, 'the executor violation must be retained in run facts');
+    assert.equal(violation.invariant, 'cachedInputTokens <= inputTokens');
+    assert.equal(violation.inputTokens, 10);
+    assert.equal(violation.cachedInputTokens, 30);
+
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    assert.equal(persisted.usageConsistency.status, 'disagreement');
+    const report = readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8');
+    assert.match(report, /token accounting bookkeeping disagreement/i);
+    assert.match(report, /input 10, cached input 30/i);
+  } finally {
+    rmSync(scr, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test('omitted model flags travel through the CLI path to both agents and run-fact defaults', async () => {
   const scr = scratch();
   const executorCalls = [];

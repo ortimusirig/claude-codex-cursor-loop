@@ -12,7 +12,12 @@ import { deriveMergeContext, withObservedTestCounts } from './merge.js';
 import { countTestFiles } from './merge-test-count.js';
 import { run as realRun } from './run.js';
 import { resolveStageTimeouts } from './timeouts.js';
-import { addUsage, EMPTY_USAGE } from './usage.js';
+import {
+  addUsage,
+  checkUsageConsistency,
+  EMPTY_USAGE,
+  summarizeUsageConsistency,
+} from './usage.js';
 
 export const DEFAULT_CONCURRENCY = 2;
 export const MAX_CONCURRENCY = 16;
@@ -30,8 +35,9 @@ const KINDS = new Set(UNIT_KINDS);
 
 export function countUsageTokens(usage) {
   const normalized = addUsage(EMPTY_USAGE, usage);
-  // cachedInputTokens is a subset of inputTokens and reasoningOutputTokens is a subset
-  // of outputTokens. Counting either again would overstate campaign consumption.
+  // Count total input plus total output: those are the tokens actually consumed for the
+  // campaign ceiling. Cached input and reasoning output are already subsets of those
+  // totals, so adding either again would double-count them and overstate consumption.
   return normalized.inputTokens + normalized.outputTokens;
 }
 
@@ -511,6 +517,7 @@ async function runCampaignRound(options) {
     ...(parents.length === 0 ? {} : { dependsOn }),
   }));
   let aggregateUsage = EMPTY_USAGE;
+  const usageChecks = [];
   let consumedTokens = 0;
   const ready = units.filter((unit) => unit.parents.length === 0).map((unit) => unit.index);
   const inheritedTopologies = new Map();
@@ -739,7 +746,12 @@ async function runCampaignRound(options) {
             || facts === null || typeof facts !== 'object' || Array.isArray(facts)
             ? facts
             : { ...facts, perspective: unit.perspective };
-          aggregateUsage = addUsage(aggregateUsage, entry.facts?.tokens?.total);
+          const unitUsage = addUsage(EMPTY_USAGE, entry.facts?.tokens?.total);
+          usageChecks.push({
+            unitId: unit.unitId,
+            ...checkUsageConsistency(unitUsage),
+          });
+          aggregateUsage = addUsage(aggregateUsage, unitUsage);
           consumedTokens = countUsageTokens(aggregateUsage);
           if (runUnit === realRun
             && children[unitIndex].length > 0
@@ -882,6 +894,7 @@ async function runCampaignRound(options) {
     outcome,
     counts,
     tokens: addUsage(EMPTY_USAGE, aggregateUsage),
+    usageConsistency: summarizeUsageConsistency(usageChecks),
     consumedTokens,
     budgetExceeded,
   };
@@ -1110,10 +1123,15 @@ function iterativeRollup(rounds, tokenBudget, stopReason) {
   };
   let skipped = 0;
   let tokens = EMPTY_USAGE;
+  const usageChecks = [];
   for (const round of rounds) {
     for (const key of Object.keys(counts)) counts[key] += round.rollup.counts[key] ?? 0;
     skipped += round.rollup.counts.skipped ?? 0;
     tokens = addUsage(tokens, round.rollup.tokens);
+    usageChecks.push(...(round.rollup.usageConsistency?.checks ?? []).map((check) => ({
+      round: round.round,
+      ...check,
+    })));
   }
   if (skipped > 0) counts.skipped = skipped;
   const consumedTokens = countUsageTokens(tokens);
@@ -1128,6 +1146,7 @@ function iterativeRollup(rounds, tokenBudget, stopReason) {
       : budgetExceeded ? 'budget-exhausted' : 'review-ready',
     counts,
     tokens,
+    usageConsistency: summarizeUsageConsistency(usageChecks),
     consumedTokens,
     budgetExceeded,
     tokenBudget,

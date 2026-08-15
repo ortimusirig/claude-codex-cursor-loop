@@ -11,15 +11,39 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { runCampaign } from '../src/campaign.js';
+import { fileURLToPath } from 'node:url';
+import { countUsageTokens, runCampaign } from '../src/campaign.js';
 import { parsePartialEventStream } from '../src/event-stream.js';
 import { formatEventSummary, reportEvent } from '../src/events.js';
 import { exitCodeFor } from '../src/exit.js';
 import { spawnCapture } from '../src/spawn.js';
+import {
+  addUsage,
+  normalizeCodexUsage,
+  normalizeCursorUsage,
+} from '../src/usage.js';
 
 const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
+
+const codexUsageSamplePath = fileURLToPath(
+  new URL('../fixtures/codex-exec-usage-sample.ndjson', import.meta.url),
+);
+const cursorUsageSamplePath = fileURLToPath(
+  new URL('../fixtures/cursor-plan-mode-sample.ndjson', import.meta.url),
+);
+
+function capturedVendorUsage() {
+  const codexRaw = readFileSync(codexUsageSamplePath, 'utf8')
+    .trim().split(/\r?\n/).map(JSON.parse).at(-1).usage;
+  const cursorRaw = readFileSync(cursorUsageSamplePath, 'utf8')
+    .trim().split(/\r?\n/).map(JSON.parse).find((event) => event.type === 'result').usage;
+  return {
+    codex: normalizeCodexUsage(codexRaw),
+    cursor: normalizeCursorUsage(cursorRaw),
+  };
+}
 
 const successFacts = (runId, tokens = 0) => ({
   runId,
@@ -69,6 +93,30 @@ test('several independent units all conclude and retain one aggregate entry each
     planned: 3, dispatched: 3, completed: 3, succeeded: 3, failed: 0, notDispatched: 0,
   });
   assert.equal(result.rollup.outcome, 'review-ready');
+});
+
+test('a campaign sums captured Codex and Cursor usage with non-negative uncached input', async () => {
+  const captured = capturedVendorUsage();
+  const result = await runCampaign({
+    campaignId: 'captured-mixed-usage',
+    tasks: ['codex executor', 'cursor verifier'],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 1,
+    tokenBudget: 1_000_000,
+    runUnit: async ({ task, runId }) => ({
+      ...successFacts(runId),
+      tokens: { total: task.startsWith('codex') ? captured.codex : captured.cursor },
+    }),
+  });
+
+  const expected = addUsage(captured.codex, captured.cursor);
+  assert.deepEqual(result.rollup.tokens, expected);
+  assert.equal(expected.inputTokens, 89755);
+  assert.equal(expected.cachedInputTokens, 64640);
+  assert.equal(expected.inputTokens - expected.cachedInputTokens, 25115);
+  assert.ok(result.rollup.tokens.inputTokens - result.rollup.tokens.cachedInputTokens >= 0);
+  assert.equal(result.rollup.usageConsistency.status, 'consistent');
 });
 
 test('configured concurrency bounds the observed in-flight unit count', async () => {
@@ -496,6 +544,35 @@ test('exceeding the token budget stops dispatch while already in-flight units fi
   assert.deepEqual(result.units.slice(2).map((entry) => entry.reason),
     ['token-budget-exceeded', 'token-budget-exceeded']);
   assert.notEqual(exitCodeFor(result.rollup.outcome), 0);
+});
+
+test('Cursor cache reads count toward the campaign ceiling before another unit dispatches', async () => {
+  const { cursor } = capturedVendorUsage();
+  const oldUnderCount = cursor.inputTokens - cursor.cachedInputTokens + cursor.outputTokens;
+  const correctedCount = countUsageTokens(cursor);
+  const tokenBudget = 40_000;
+  assert.ok(oldUnderCount < tokenBudget, 'positive control: old accounting stays below ceiling');
+  assert.ok(correctedCount > tokenBudget, 'corrected accounting must cross the ceiling');
+
+  const launched = [];
+  const result = await runCampaign({
+    campaignId: 'cursor-inclusive-budget',
+    tasks: ['first', 'must-not-launch'],
+    target: 'unused-by-adapter',
+    gate: [],
+    concurrency: 1,
+    tokenBudget,
+    runUnit: async ({ task, runId }) => {
+      launched.push(task);
+      return { ...successFacts(runId), tokens: { total: cursor } };
+    },
+  });
+
+  assert.deepEqual(launched, ['first']);
+  assert.equal(result.rollup.consumedTokens, 59823);
+  assert.equal(result.rollup.outcome, 'budget-exhausted');
+  assert.equal(result.rollup.counts.notDispatched, 1);
+  assert.equal(result.units[1].reason, 'token-budget-exceeded');
 });
 
 test('campaign and concurrent unit events carry complete, correctly scoped identity', async () => {

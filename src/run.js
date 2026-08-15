@@ -16,7 +16,13 @@ import {
 } from './verifier.js';
 import { buildRunFacts, writeReport } from './report.js';
 import { spawnCapture } from './spawn.js';
-import { addUsage, EMPTY_USAGE } from './usage.js';
+import {
+  addUsage,
+  annotateUsageConsistency,
+  checkUsageConsistency,
+  EMPTY_USAGE,
+  summarizeUsageConsistency,
+} from './usage.js';
 import { resolveTask } from './task.js';
 import { resolveStageTimeouts } from './timeouts.js';
 import { reportEvent } from './events.js';
@@ -218,6 +224,7 @@ export async function run(opts) {
   let outcome = 'gate-failed';
   let executorUsage = EMPTY_USAGE;
   let verifierUsage = EMPTY_USAGE;
+  const usageChecks = [];
   let gateFailure = null;
   const timeoutEvents = [];
   let gateRetryCount = 0;
@@ -243,6 +250,12 @@ export async function run(opts) {
   };
 
   const n = 1;
+  const observeUsage = (result, context) => {
+    const annotated = annotateUsageConsistency(result);
+    const consistency = annotated?.usageConsistency ?? checkUsageConsistency(result?.usage);
+    usageChecks.push({ ...context, ...consistency });
+    return annotated;
+  };
   let iterationExecutorUsage = EMPTY_USAGE;
   const executePlan = async (basePlan) => {
     let attemptPlan = basePlan;
@@ -256,12 +269,12 @@ export async function run(opts) {
       activeExecutor = slot;
       let result;
       try {
-        result = await runExecutor({
+        result = observeUsage(await runExecutor({
           plan: attemptPlan, cwd: iso.dir, model: executorModel, effort: executorEffort,
           timeoutMs: stageTimeouts.executor,
           reporter: eventReporter, runId, attempt,
           ...(controller ? { signal: controller.signal } : {}),
-        });
+        }), { seat: 'executor', iteration: n, attempt });
       } finally {
         if (activeExecutor === slot) activeExecutor = null;
       }
@@ -413,6 +426,7 @@ export async function run(opts) {
       exitCode: Number.isInteger(exec.exitCode) ? exec.exitCode : null,
       timedOut: executorTimedOut,
       timeoutMs: exec.timeoutMs ?? stageTimeouts.executor,
+      ...(exec.usageConsistency ? { usageConsistency: exec.usageConsistency } : {}),
     },
     gate: gateResult, verifier: null, intentVerifier: null };
 
@@ -453,16 +467,16 @@ export async function run(opts) {
         verdict: 'produced', file: 'CHANGES.diff',
       });
 
-      const v = annotateVerifierConsistency(await runVerifier({
+      const v = annotateVerifierConsistency(observeUsage(await runVerifier({
         cwd: iso.dir, model: verifierModel, prompt: DEFAULT_PROMPT,
         timeoutMs: stageTimeouts.verifier,
         reporter: eventReporter, runId, pass: 'correctness',
-      }));
-      const intentVerifier = annotateVerifierConsistency(await runVerifier({
+      }), { seat: 'verifier', pass: 'correctness', iteration: n }));
+      const intentVerifier = annotateVerifierConsistency(observeUsage(await runVerifier({
         cwd: iso.dir, model: verifierModel, prompt: INTENT_PROMPT,
         timeoutMs: stageTimeouts.verifier,
         reporter: eventReporter, runId, pass: 'intent',
-      }));
+      }), { seat: 'verifier', pass: 'intent', iteration: n }));
       if (v.timedOut) {
         timeoutEvents.push({ stage: 'verifier', pass: 'correctness', iteration: n,
           timeoutMs: v.timeoutMs ?? stageTimeouts.verifier });
@@ -504,6 +518,7 @@ export async function run(opts) {
     verifier: verifierUsage,
     total: addUsage(executorUsage, verifierUsage),
   };
+  const usageConsistency = summarizeUsageConsistency(usageChecks);
   const mergeFacts = merge === undefined ? null : {
     parentOrder: [...merge.parentOrder],
     parents: merge.parents.map((parent) => ({ ...parent })),
@@ -528,7 +543,7 @@ export async function run(opts) {
     verifierPlan, verifierEvidence, verifierConsistency,
     intentVerifierFindings, intentVerdict, intentVerdictSource,
     intentVerifierPlan, intentVerifierEvidence, intentVerifierConsistency,
-    gateFailure, tokens, outcome, gateRetries,
+    gateFailure, tokens, usageConsistency, outcome, gateRetries,
     timeouts: stageTimeouts, timeoutEvents,
     ...(campaignId === undefined
       ? {}
