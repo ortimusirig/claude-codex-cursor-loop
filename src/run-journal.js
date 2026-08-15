@@ -201,7 +201,7 @@ function journalIdentity(facts, supplied) {
     campaignId: facts.campaignId,
     round: facts.round,
     unitId: facts.unitId ?? facts.runId,
-    unitKind: facts.unitKind,
+    unitKind: facts.campaignUnitKind ?? facts.unitKind,
   };
 }
 

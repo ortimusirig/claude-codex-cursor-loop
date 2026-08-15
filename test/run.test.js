@@ -5,7 +5,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from '../src/args.js';
 import { DEFAULT_EXECUTOR_EFFORT, DEFAULT_EXECUTOR_MODEL } from '../src/executor.js';
-import { run, diffText, mergeVerifierVerdicts } from '../src/run.js';
+import { HARNESS_ARTIFACTS, run, diffText, mergeVerifierVerdicts } from '../src/run.js';
 import { EMPTY_USAGE } from '../src/usage.js';
 import {
   DEFAULT_PROMPT,
@@ -562,19 +562,50 @@ test('diffText throws when git fails (non-git dir)', async () => {
   await assert.rejects(() => diffText(d), /git (add|diff) failed/);
 });
 
-test('diffText excludes every harness artifact with real git pathspecs', async () => {
+test('diffText unstages every pre-staged harness artifact and retains real changes', async () => {
   const d = makeTarget();
   await spawnCapture('git', ['-C', d, 'init', '-b', 'main']);
   await spawnCapture('git', ['-C', d, 'add', '-A']);
   await spawnCapture('git', ['-C', d, '-c', 'user.email=t@t', '-c', 'user.name=t',
     'commit', '-m', 'baseline']);
   writeFileSync(join(d, 'feature.js'), 'export const enabled = true;\n');
-  for (const artifact of ['TASK.md', 'CHANGES.diff', 'ccc-report.md', 'ccc-runfacts.json']) {
+  for (const artifact of HARNESS_ARTIFACTS) {
     writeFileSync(join(d, artifact), `harness-only ${artifact}\n`);
   }
+  const staged = await spawnCapture('git', ['-C', d, 'add', '-A']);
+  assert.equal(staged.code, 0, staged.stderr);
+  const stagedNames = await spawnCapture('git', ['-C', d, 'diff', '--cached', '--name-only']);
+  assert.ok(HARNESS_ARTIFACTS.every((artifact) => stagedNames.stdout.split(/\r?\n/).includes(artifact)),
+    'positive control: every harness artifact must be staged before diffText runs');
+
   const diff = await diffText(d);
   assert.match(diff, /feature[.]js/);
-  for (const artifact of ['TASK.md', 'CHANGES.diff', 'ccc-report.md', 'ccc-runfacts.json']) {
+  for (const artifact of HARNESS_ARTIFACTS) {
+    assert.doesNotMatch(diff, new RegExp(artifact.replace('.', '[.]')));
+  }
+  rmSync(d, { recursive: true, force: true });
+});
+
+test('diffText succeeds when gitignore lists every harness artifact', async () => {
+  const d = makeTarget();
+  await spawnCapture('git', ['-C', d, 'init', '-b', 'main']);
+  writeFileSync(join(d, '.gitignore'), `${HARNESS_ARTIFACTS.join('\n')}\n`);
+  await spawnCapture('git', ['-C', d, 'add', '-A']);
+  await spawnCapture('git', ['-C', d, '-c', 'user.email=t@t', '-c', 'user.name=t',
+    'commit', '-m', 'baseline']);
+  writeFileSync(join(d, 'feature.js'), 'export const ignoredArtifactsStayIgnored = true;\n');
+  for (const artifact of HARNESS_ARTIFACTS) {
+    writeFileSync(join(d, artifact), `ignored harness-only ${artifact}\n`);
+  }
+  const ignored = await spawnCapture('git', ['-C', d, 'check-ignore', ...HARNESS_ARTIFACTS]);
+  assert.equal(ignored.code, 0, ignored.stderr);
+  assert.deepEqual(ignored.stdout.trim().split(/\r?\n/).sort(), [...HARNESS_ARTIFACTS].sort(),
+    'positive control: git must ignore every harness artifact');
+
+  const diff = await diffText(d);
+  assert.match(diff, /feature[.]js/);
+  assert.match(diff, /ignoredArtifactsStayIgnored/);
+  for (const artifact of HARNESS_ARTIFACTS) {
     assert.doesNotMatch(diff, new RegExp(artifact.replace('.', '[.]')));
   }
   rmSync(d, { recursive: true, force: true });

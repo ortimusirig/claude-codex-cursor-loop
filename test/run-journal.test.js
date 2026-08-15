@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -15,8 +15,19 @@ import {
   generateRunJournal,
   generateRunJournalCampaign,
 } from '../src/run-journal.js';
+import { runCampaign } from '../src/campaign.js';
+import { run } from '../src/run.js';
 
 const projectRunsDir = fileURLToPath(new URL('../docs/runs/', import.meta.url));
+const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+  ? 'C:/ccc-test'
+  : join(homedir(), '.ccc-test'));
+
+const noOpAdapters = {
+  runExecutor: async () => ({ changedFiles: [], lastMessage: 'no changes', usage: {} }),
+  runGate: async () => ({ passed: true, results: [] }),
+  runVerifier: async () => { throw new Error('no-op runs must not verify'); },
+};
 
 const correctnessFindings = 'Correctness: the "cache key" is stale.\nUse the normalized path.';
 const intentFindings = 'Intent: the "whole campaign" rebuild is absent.\nRegenerate every run.';
@@ -228,36 +239,94 @@ test('campaign mode recursively regenerates every discovered run', () => {
   }
 });
 
-test('journal generation emits attributed start and finish events without trusting the sink', () => {
-  const root = mkdtempSync(join(tmpdir(), 'run-journal-events-'));
-  const facts = {
-    ...fixtureFacts,
-    runId: `2026-08-15T02-00-00-000Z-journal-events-${process.pid}`,
-    campaignId: 'journal-campaign',
-    round: 3,
-    unitId: 'journal-unit',
-    unitKind: 'merge',
-  };
-  const workDir = join(root, facts.runId, 'w');
-  const factsPath = join(workDir, 'ccc-runfacts.json');
-  const notePath = join(projectRunsDir, `${facts.runId}.md`);
+test('journal generation attributes events from run facts written by a real campaign', async () => {
+  mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
+  const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.journal-campaign-'));
+  const target = mkdtempSync(join(tmpdir(), 'run-journal-campaign-target-'));
+  const campaignId = `journal-campaign-${process.pid}`;
+  const unitId = `2026-08-15T02-00-00-000Z-journal-unit-${process.pid}`;
+  const notePath = join(projectRunsDir, `${unitId}.md`);
   const events = [];
-  mkdirSync(workDir, { recursive: true });
-  writeFileSync(factsPath, JSON.stringify(facts));
+  writeFileSync(join(target, 'seed.txt'), 'seed\n');
   try {
+    const campaign = await runCampaign({
+      campaignId,
+      round: 3,
+      tasks: [{ task: 'Do nothing.', unitId, unitKind: 'node' }],
+      target,
+      gate: [],
+      concurrency: 1,
+      tokenBudget: 1000,
+      scratchRoot,
+      runOptions: { gateRetries: 0, adapters: noOpAdapters },
+    });
+    const factsPath = join(campaign.units[0].facts.dir, 'ccc-runfacts.json');
+    const persisted = JSON.parse(readFileSync(factsPath, 'utf8'));
+    assert.deepEqual({
+      campaignId: persisted.campaignId,
+      round: persisted.round,
+      unitId: persisted.unitId,
+    }, { campaignId, round: 3, unitId });
+    assert.equal(Object.hasOwn(persisted, 'unitKind'), false,
+      'ordinary campaign units must retain their existing run-facts shape');
+
     const result = generateRunJournal(factsPath, { reporter: (event) => events.push(event) });
     assert.equal(result.notePath, notePath);
     assert.deepEqual(events.map((event) => `${event.stage}/${event.type}`),
       ['journal/start', 'journal/finish']);
-    assert.ok(events.every((event) => event.campaignId === 'journal-campaign'));
+    assert.ok(events.every((event) => event.campaignId === campaignId));
     assert.ok(events.every((event) => event.round === 3));
-    assert.ok(events.every((event) => event.unitId === 'journal-unit'));
-    assert.ok(events.every((event) => event.unitKind === 'merge'));
+    assert.ok(events.every((event) => event.unitId === unitId));
+    assert.ok(events.every((event) => event.unitKind === 'node'));
     assert.doesNotThrow(() => generateRunJournal(factsPath, {
       reporter: () => { throw new Error('broken journal event sink'); },
     }));
   } finally {
     rmSync(notePath, { force: true });
-    rmSync(root, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('journal generation leaves standalone run events unattributed', async () => {
+  mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
+  const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.journal-standalone-'));
+  const target = mkdtempSync(join(tmpdir(), 'run-journal-standalone-target-'));
+  const runId = `2026-08-15T02-30-00-000Z-journal-standalone-${process.pid}`;
+  const notePath = join(projectRunsDir, `${runId}.md`);
+  const events = [];
+  writeFileSync(join(target, 'seed.txt'), 'seed\n');
+  try {
+    const facts = await run({
+      task: 'Do nothing.',
+      target,
+      gate: [],
+      gateRetries: 0,
+      scratchRoot,
+      runId,
+      adapters: noOpAdapters,
+    });
+    const factsPath = join(facts.dir, 'ccc-runfacts.json');
+    const persisted = JSON.parse(readFileSync(factsPath, 'utf8'));
+    for (const field of ['campaignId', 'round', 'unitId', 'campaignUnitKind', 'unitKind']) {
+      assert.equal(Object.hasOwn(persisted, field), false,
+        `standalone facts must not invent ${field}`);
+    }
+
+    assert.doesNotThrow(() => generateRunJournal(factsPath, {
+      reporter: (event) => events.push(event),
+    }));
+    assert.deepEqual(events.map((event) => `${event.stage}/${event.type}`),
+      ['journal/start', 'journal/finish']);
+    for (const event of events) {
+      for (const field of ['campaignId', 'round', 'unitId', 'unitKind']) {
+        assert.equal(Object.hasOwn(event, field), false,
+          `standalone journal event must not invent ${field}`);
+      }
+    }
+  } finally {
+    rmSync(notePath, { force: true });
+    rmSync(target, { recursive: true, force: true });
+    rmSync(scratchRoot, { recursive: true, force: true });
   }
 });

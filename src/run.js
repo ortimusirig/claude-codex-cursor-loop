@@ -40,14 +40,16 @@ export { HARNESS_ARTIFACTS } from './artifacts.js';
 // read this one list so a new artifact cannot be added to one and forgotten in the other.
 export async function diffText(dir, baseRef = 'HEAD') {
   // Stage first so NEW (untracked) files appear — `git diff HEAD` alone omits them.
-  // Harness artifacts live in the worktree so the agents can read them, but must not
-  // become part of the proposed change. A pathspec keeps linked worktrees isolated;
-  // .git/info/exclude would resolve into and mutate the user's shared common git dir.
-  const add = await spawnCapture('git', [
-    '-C', dir, 'add', '-A', '--', '.',
-    ...HARNESS_ARTIFACTS.map((name) => `:(exclude)${name}`),
-  ]);
+  // Reset every harness artifact from the index after staging. This removes artifacts
+  // another actor pre-staged and avoids passing ignored artifact paths to `git add`.
+  const add = await spawnCapture('git', ['-C', dir, 'add', '-A']);
   if (add.code !== 0) throw new Error(`git add failed in ${dir}: ${add.stderr.trim()}`);
+  const unstage = await spawnCapture('git', [
+    '-C', dir, 'reset', '--quiet', '--', ...HARNESS_ARTIFACTS,
+  ]);
+  if (unstage.code !== 0) {
+    throw new Error(`git reset failed in ${dir}: ${unstage.stderr.trim()}`);
+  }
   const r = await spawnCapture('git', ['-C', dir, 'diff', '--cached', baseRef]);
   if (r.code !== 0) throw new Error(`git diff failed in ${dir}: ${r.stderr.trim()}`);
   return r.stdout;
@@ -90,7 +92,8 @@ export function planWithStallNotice(plan, stall) {
 export async function run(opts) {
   const {
     task, target, gate, gateRetries, scratchRoot, runId,
-    baseRef = 'HEAD', branch, branchName, campaignId, campaignBase, unitKind, merge,
+    baseRef = 'HEAD', branch, branchName, campaignId, campaignBase,
+    round, unitId, campaignUnitKind, unitKind, merge,
     captureTestCount = false,
     executorModel = DEFAULT_EXECUTOR_MODEL,
     executorEffort = DEFAULT_EXECUTOR_EFFORT,
@@ -527,6 +530,7 @@ export async function run(opts) {
     intentVerifierPlan, intentVerifierEvidence, intentVerifierConsistency,
     gateFailure, tokens, outcome, gateRetries,
     timeouts: stageTimeouts, timeoutEvents,
+    ...(campaignId === undefined ? {} : { campaignId, round, unitId, campaignUnitKind }),
     supervision: stallConfig ? {
       policy: stallConfig.policy,
       thresholdMs: stallConfig.thresholdMs,

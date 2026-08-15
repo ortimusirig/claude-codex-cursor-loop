@@ -35,6 +35,10 @@ export function buildRunFacts({
   timeouts = {},
   timeoutEvents = [],
   supervision = null,
+  campaignId,
+  round,
+  unitId,
+  campaignUnitKind,
   unitKind,
   merge,
 }) {
@@ -74,6 +78,12 @@ export function buildRunFacts({
     },
     outcome,
   };
+  if (campaignId !== undefined) {
+    facts.campaignId = campaignId;
+    facts.round = round;
+    facts.unitId = unitId;
+    facts.campaignUnitKind = campaignUnitKind;
+  }
   if (unitKind !== undefined) facts.unitKind = unitKind;
   if (merge !== undefined) facts.merge = merge;
   if (supervision !== null) {
