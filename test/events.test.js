@@ -127,6 +127,12 @@ test('stage transitions and executor file changes reach the reporter in order', 
     const fileChange = events.find((event) => event.type === 'file_change');
     assert.equal(fileChange.file, 'observed.txt');
     assert.equal(fileChange.runId, 'ordered-events');
+    const isolateFinish = events.find((event) => (
+      event.stage === 'isolate' && event.type === 'finish'
+    ));
+    assert.equal(isolateFinish.baseRef, 'HEAD');
+    assert.equal(isolateFinish.branch, 'ccc/ordered-events');
+    assert.match(isolateFinish.baseCommit, /^[0-9a-f]{40,64}$/);
   } finally {
     rmSync(tgt, { recursive: true, force: true });
     rmSync(scr, { recursive: true, force: true });

@@ -13,6 +13,7 @@ import { join, relative } from 'node:path';
 import { runCampaign } from '../src/campaign.js';
 import { reportEvent } from '../src/events.js';
 import { exitCodeFor } from '../src/exit.js';
+import { spawnCapture } from '../src/spawn.js';
 
 const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
@@ -38,6 +39,12 @@ async function waitUntil(predicate) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   throw new Error('condition was not observed');
+}
+
+async function gitOk(cwd, ...args) {
+  const result = await spawnCapture('git', ['-C', cwd, ...args]);
+  assert.equal(result.code, 0, result.stderr);
+  return result.stdout.trim();
 }
 
 test('several independent units all conclude and retain one aggregate entry each', async () => {
@@ -274,6 +281,151 @@ test('the single-writer campaign stream is valid NDJSON and stays outside every 
       assert.ok(relative(entry.facts.dir, campaignEventsPath).startsWith('..'),
         'campaign stream must live outside the unit worktree');
     }
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('a non-repo campaign gives every unit exactly one shared root commit', async () => {
+  mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
+  const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.shared-base-'));
+  const target = mkdtempSync(join(tmpdir(), 'shared-base-target-'));
+  writeFileSync(join(target, 'seed.txt'), 'one campaign baseline\n');
+  try {
+    const result = await runCampaign({
+      campaignId: 'shared-nonrepo-base',
+      tasks: ['unit one', 'unit two', 'unit three'],
+      target,
+      gate: [],
+      concurrency: 3,
+      tokenBudget: 1000,
+      scratchRoot,
+      runOptions: {
+        gateRetries: 0,
+        adapters: {
+          runExecutor: async () => ({ changedFiles: [], lastMessage: 'no changes', usage: {} }),
+          runGate: async () => ({ passed: true, results: [] }),
+          runVerifier: async () => { throw new Error('no-op units must not verify'); },
+        },
+      },
+    });
+
+    assert.equal(result.rollup.counts.succeeded, 3);
+    const roots = await Promise.all(result.units.map((entry) => (
+      gitOk(entry.facts.dir, 'rev-list', '--max-parents=0', 'HEAD')
+    )));
+    assert.equal(roots.length, 3, 'positive control: every unit must contribute a root');
+    assert.equal(new Set(roots).size, 1,
+      `all units must share one campaign root, got ${JSON.stringify(roots)}`);
+    const commonDirectories = await Promise.all(result.units.map((entry) => (
+      gitOk(entry.facts.dir, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    )));
+    assert.equal(new Set(commonDirectories).size, 1,
+      'positive control: equal commit hashes are insufficient; units must share one repository');
+    assert.ok(result.units.every((entry) => entry.facts.isRepo === false),
+      'the facts must continue to describe the original non-repo target');
+    assert.ok(result.units.every((entry) => entry.facts.baseRef === 'HEAD'));
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('campaign unit topology reaches isolation and is recorded in run facts', async () => {
+  mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
+  const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.facts-base-'));
+  const target = mkdtempSync(join(tmpdir(), 'facts-base-target-'));
+  let result;
+  try {
+    await gitOk(target, 'init', '-b', 'main');
+    writeFileSync(join(target, 'version.txt'), 'selected base\n');
+    await gitOk(target, 'add', '-A');
+    await gitOk(target, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'base');
+    const selectedCommit = await gitOk(target, 'rev-parse', 'HEAD');
+    await gitOk(target, 'tag', 'planner-base');
+    writeFileSync(join(target, 'version.txt'), 'different HEAD\n');
+    await gitOk(target, 'add', '-A');
+    await gitOk(target, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'head');
+
+    result = await runCampaign({
+      campaignId: 'facts-topology',
+      tasks: [{
+        task: 'Do nothing.',
+        unitId: 'facts-unit',
+        unitKind: 'node',
+        baseRef: 'planner-base',
+        branch: 'planner/facts-unit',
+      }],
+      target,
+      gate: [],
+      concurrency: 1,
+      tokenBudget: 1000,
+      scratchRoot,
+      runOptions: {
+        gateRetries: 0,
+        adapters: {
+          runExecutor: async () => ({ changedFiles: [], lastMessage: 'no changes', usage: {} }),
+          runGate: async () => ({ passed: true, results: [] }),
+          runVerifier: async () => { throw new Error('no-op unit must not verify'); },
+        },
+      },
+    });
+
+    const facts = result.units[0].facts;
+    assert.equal(facts.baseRef, 'planner-base');
+    assert.equal(facts.baseCommit, selectedCommit);
+    assert.equal(facts.branch, 'planner/facts-unit');
+    assert.equal(readFileSync(join(facts.dir, 'version.txt'), 'utf8').trim(), 'selected base');
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    assert.deepEqual(
+      { baseRef: persisted.baseRef, baseCommit: persisted.baseCommit, branch: persisted.branch },
+      { baseRef: 'planner-base', baseCommit: selectedCommit, branch: 'planner/facts-unit' },
+    );
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('one campaign isolation failure does not prevent another unit from running', async () => {
+  mkdirSync(SAFE_SCRATCH_BASE, { recursive: true });
+  const scratchRoot = mkdtempSync(join(SAFE_SCRATCH_BASE, '.isolate-failure-'));
+  const target = mkdtempSync(join(tmpdir(), 'isolate-failure-target-'));
+  try {
+    await gitOk(target, 'init', '-b', 'main');
+    writeFileSync(join(target, 'seed.txt'), 'seed\n');
+    await gitOk(target, 'add', '-A');
+    await gitOk(target, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'base');
+    await gitOk(target, 'branch', 'planner/already-there');
+
+    const result = await runCampaign({
+      campaignId: 'isolate-one-fails',
+      tasks: [
+        { task: 'This unit fails.', unitId: 'bad-unit', branch: 'planner/already-there' },
+        { task: 'This unit succeeds.', unitId: 'good-unit', branch: 'planner/good-unit' },
+      ],
+      target,
+      gate: [],
+      concurrency: 2,
+      tokenBudget: 1000,
+      scratchRoot,
+      runOptions: {
+        gateRetries: 0,
+        adapters: {
+          runExecutor: async () => ({ changedFiles: [], lastMessage: 'ran', usage: {} }),
+          runGate: async () => ({ passed: true, results: [] }),
+          runVerifier: async () => { throw new Error('no-op unit must not verify'); },
+        },
+      },
+    });
+
+    assert.equal(result.units[0].status, 'failed');
+    assert.match(result.units[0].error.message, /already exists/i);
+    assert.equal(result.units[1].status, 'completed');
+    assert.equal(result.units[1].facts.outcome, 'no-op');
+    assert.equal(result.rollup.counts.failed, 1);
+    assert.equal(result.rollup.counts.succeeded, 1);
   } finally {
     rmSync(target, { recursive: true, force: true });
     rmSync(scratchRoot, { recursive: true, force: true });

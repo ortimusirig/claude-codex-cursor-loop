@@ -1,5 +1,6 @@
 import { exitCodeFor } from './exit.js';
 import { identifyEvent, reportEvent, UNIT_KINDS } from './events.js';
+import { prepareCampaignBase } from './isolation.js';
 import { run as realRun } from './run.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
 
@@ -48,7 +49,13 @@ function normalizeUnits(tasks, unitKind, campaignId) {
     }
     if (seen.has(unitId)) throw new TypeError(`duplicate campaign unitId: ${unitId}`);
     seen.add(unitId);
-    return { index, task, unitKind: kind, unitId };
+    const baseRef = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      ? raw.baseRef
+      : undefined;
+    const branch = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw.branch ?? raw.branchName)
+      : undefined;
+    return { index, task, unitKind: kind, unitId, baseRef, branch };
   });
 }
 
@@ -91,6 +98,9 @@ export async function runCampaign({
   if (typeof runUnit !== 'function') throw new TypeError('runUnit must be a function');
 
   const units = normalizeUnits(tasks, unitKind, campaignId);
+  const campaignBase = runOptions.campaignBase ?? (runUnit === realRun
+    ? await prepareCampaignBase({ target, campaignId, scratchRoot })
+    : undefined);
   const entries = units.map(({ index, unitId, unitKind: kind }) => ({
     index,
     unitId,
@@ -162,8 +172,12 @@ export async function runCampaign({
           task: unit.task,
           target,
           gate,
+          campaignId,
           scratchRoot,
           runId: unit.unitId,
+          ...(campaignBase ? { campaignBase } : {}),
+          ...(unit.baseRef === undefined ? {} : { baseRef: unit.baseRef }),
+          ...(unit.branch === undefined ? {} : { branch: unit.branch }),
           ...(unitReporter ? { reporter: unitReporter } : {}),
         })).then((facts) => {
           entry.status = 'completed';

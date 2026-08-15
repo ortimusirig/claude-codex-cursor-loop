@@ -62,6 +62,9 @@ test('correctness and intent findings are separately lifted while verdict is mer
   assert.equal(facts.intentVerdict, 'ISSUES');
   assert.equal(facts.intentVerdictSource, 'assistant');
   assert.equal(facts.intentVerifierPlan, null);
+  assert.equal(facts.baseRef, 'HEAD');
+  assert.match(facts.baseCommit, /^[0-9a-f]{40,64}$/);
+  assert.equal(facts.branch, 'ccc/f1');
   assert.deepEqual(verifierCalls.map((call) => call.prompt), [DEFAULT_PROMPT, INTENT_PROMPT]);
   rmSync(scr, { recursive: true, force: true });
 });

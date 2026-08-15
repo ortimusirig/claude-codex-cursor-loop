@@ -86,6 +86,7 @@ export function planWithStallNotice(plan, stall) {
 export async function run(opts) {
   const {
     task, target, gate, gateRetries, scratchRoot, runId,
+    baseRef = 'HEAD', branch, branchName, campaignId, campaignBase,
     executorModel = DEFAULT_EXECUTOR_MODEL,
     executorEffort = DEFAULT_EXECUTOR_EFFORT,
     verifierModel = DEFAULT_VERIFIER_MODEL,
@@ -144,7 +145,17 @@ export async function run(opts) {
   }
 
   try {
-  const iso = await isolate({ target, runId, scratchRoot, reporter: eventReporter });
+  const iso = await isolate({
+    target,
+    runId,
+    scratchRoot,
+    reporter: eventReporter,
+    baseRef,
+    branch,
+    branchName,
+    campaignId,
+    campaignBase,
+  });
   writeFileSync(join(iso.dir, 'TASK.md'), plan);
   const iterations = [];
   let gateStatus = 'failed';
@@ -337,7 +348,8 @@ export async function run(opts) {
     total: addUsage(executorUsage, verifierUsage),
   };
   const facts = buildRunFacts({ runId, target, dir: iso.dir, isRepo: iso.isRepo,
-    branch: iso.branch, iterations, gateStatus, verdict, verdictSource, verifierFindings,
+    baseRef: iso.baseRef, baseCommit: iso.baseCommit, branch: iso.branch,
+    iterations, gateStatus, verdict, verdictSource, verifierFindings,
     verifierPlan, intentVerifierFindings, intentVerdict, intentVerdictSource,
     intentVerifierPlan, gateFailure, tokens, outcome, gateRetries,
     timeouts: stageTimeouts, timeoutEvents,

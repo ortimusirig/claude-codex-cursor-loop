@@ -228,8 +228,9 @@ function detailFor(event) {
   }
   if (event.stage === 'isolate') {
     return event.type === 'start'
-      ? 'creating isolated copy'
-      : `created ${oneLine(event.dir)} source=${oneLine(event.source)}`;
+      ? `creating isolated copy base=${oneLine(event.baseRef)} branch=${oneLine(event.branch)}`
+      : `created ${oneLine(event.dir)} source=${oneLine(event.source)} `
+        + `base=${oneLine(event.baseRef)} branch=${oneLine(event.branch)}`;
   }
   if (event.stage === 'executor' && event.type === 'retry') {
     return `starting retry${attempt} reason=${oneLine(event.reason)}`;

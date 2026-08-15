@@ -10,6 +10,8 @@ export function buildRunFacts({
   target,
   dir,
   isRepo,
+  baseRef = 'HEAD',
+  baseCommit = null,
   branch,
   iterations,
   gateStatus,
@@ -31,7 +33,7 @@ export function buildRunFacts({
   supervision = null,
 }) {
   const facts = {
-    runId, target, dir, isRepo, branch,
+    runId, target, dir, isRepo, baseRef, baseCommit, branch,
     model: {
       executor: models?.executor ?? DEFAULT_EXECUTOR_MODEL,
       executorEffort: models?.executorEffort ?? DEFAULT_EXECUTOR_EFFORT,
@@ -122,6 +124,8 @@ export function buildReportMarkdown(facts, {
     `- **Gate:** ${facts.gateStatus}`,
     `- **Verdict:** ${facts.verdict ?? 'n/a'} (source: ${facts.verdictSource ?? 'n/a'})`,
     `- **Intent verdict:** ${facts.intentVerdict ?? 'n/a'} (source: ${facts.intentVerdictSource ?? 'n/a'})`,
+    `- **Base ref:** ${facts.baseRef}`,
+    `- **Base commit:** ${facts.baseCommit}`,
     `- **Branch:** ${facts.branch}`,
     `- **Iterations:** ${facts.iterations.length}`,
     ...(configuredTimeouts && Object.values(configuredTimeouts).some((value) => value !== null)
