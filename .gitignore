@@ -1,0 +1,18 @@
+# Harness artifacts — written into a run's isolated directory, never part of the product.
+# Kept in sync with HARNESS_ARTIFACTS in src/run.js.
+TASK.md
+CHANGES.diff
+ccc-report.md
+ccc-runfacts.json
+events.jsonl
+
+# Test scratch directories, if a test ever creates one in-tree.
+.ccc-test-*/
+
+# Local editor / tool state.
+.claude/settings.local.json
+
+# Node — this package has zero runtime dependencies and no build step, but a stray
+# install should not be committed.
+node_modules/
+*.log

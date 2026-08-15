@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+// bin/loop.js
+import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { parseArgs } from '../src/args.js';
+import { preflight } from '../src/preflight.js';
+import { run } from '../src/run.js';
+import { exitCodeFor } from '../src/exit.js';
+import { formatEventSummary } from '../src/events.js';
+import { formatRunStatus, readRunStatus } from '../src/status.js';
+
+// Short path, outside OneDrive and outside AppData (both are rejected by
+// assertSafeScratchRoot; AppData is MSIX-redirected under a packaged host).
+const DEFAULT_SCRATCH = process.platform === 'win32'
+  ? 'C:/ccc/w'
+  : join(homedir(), '.ccc', 'w');
+const SCRATCH_ROOT = process.env.CCC_SCRATCH_ROOT ?? DEFAULT_SCRATCH;
+
+function createCliReporter({ eventsPath, quiet }) {
+  // isolate/start precedes creation of the isolated directory. Hold only those opening
+  // lines until the directory exists, then append every line exactly once. After that,
+  // each event is its own append so a killed process still leaves valid partial NDJSON.
+  const pending = [];
+  return (event) => {
+    if (!quiet) {
+      try { process.stderr.write(`${formatEventSummary(event)}\n`); } catch { /* drop sink */ }
+    }
+    try {
+      const line = `${JSON.stringify(event)}\n`;
+      if (!existsSync(dirname(eventsPath))) {
+        pending.push(line);
+        return;
+      }
+      if (pending.length > 0) appendFileSync(eventsPath, pending.splice(0).join(''));
+      appendFileSync(eventsPath, line);
+    } catch {
+      // Observability must never decide a run's outcome.
+    }
+  };
+}
+
+async function main() {
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (e) {
+    process.stderr.write(`arg error: ${e.message}\n`);
+    process.exit(2);
+  }
+  if (opts.command === 'status') {
+    process.stdout.write(formatRunStatus(readRunStatus(opts.runDirectory)));
+    return;
+  }
+  const pf = await preflight({ task: opts.task, target: opts.target, gate: opts.gate, scratchRoot: SCRATCH_ROOT });
+  if (!pf.ok) {
+    process.stderr.write(`preflight failed: ${pf.reason}\n`);
+    process.exit(2);
+  }
+  const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+  const eventsPath = join(SCRATCH_ROOT, runId, 'w', 'events.jsonl');
+  const reporter = createCliReporter({ eventsPath, quiet: opts.quiet });
+  const facts = await run({
+    task: opts.task,
+    target: opts.target,
+    gate: opts.gate,
+    gateRetries: opts.gateRetries,
+    executorModel: opts.executorModel,
+    executorEffort: opts.executorEffort,
+    verifierModel: opts.verifierModel,
+    scratchRoot: SCRATCH_ROOT,
+    runId,
+    reporter,
+  });
+  process.stdout.write(JSON.stringify(facts, null, 2) + '\n');
+  process.exit(exitCodeFor(facts.outcome));
+}
+
+main().catch((e) => { process.stderr.write(`fatal: ${e.stack}\n`); process.exit(3); });

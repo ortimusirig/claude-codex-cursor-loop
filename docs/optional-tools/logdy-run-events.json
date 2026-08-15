@@ -1,0 +1,100 @@
+{
+  "name": "ccc-run-events",
+  "columns": [
+    {
+      "id": "ccc-ts",
+      "name": "Time",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.ts || \"\") }; }",
+      "idx": 0,
+      "width": 210,
+      "faceted": false
+    },
+    {
+      "id": "ccc-run-id",
+      "name": "Run",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.runId || \"\") }; }",
+      "idx": 1,
+      "width": 230,
+      "faceted": true
+    },
+    {
+      "id": "ccc-stage",
+      "name": "Stage",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.stage || \"\") }; }",
+      "idx": 2,
+      "width": 90,
+      "faceted": true
+    },
+    {
+      "id": "ccc-type",
+      "name": "Type",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.type || \"\") }; }",
+      "idx": 3,
+      "width": 110,
+      "faceted": true
+    },
+    {
+      "id": "ccc-pass",
+      "name": "Pass",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.pass || \"\") }; }",
+      "idx": 4,
+      "width": 105,
+      "faceted": true
+    },
+    {
+      "id": "ccc-file",
+      "name": "File",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.file || \"\") }; }",
+      "idx": 5,
+      "width": 240,
+      "faceted": false
+    },
+    {
+      "id": "ccc-command",
+      "name": "Command",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; const args = Array.isArray(event.args) ? event.args : []; return { text: [event.bin || \"\", ...args].join(\" \").trim() }; }",
+      "idx": 6,
+      "width": 300,
+      "faceted": false
+    },
+    {
+      "id": "ccc-code",
+      "name": "Code",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: event.code === undefined ? \"\" : String(event.code) }; }",
+      "idx": 7,
+      "width": 70,
+      "faceted": true
+    },
+    {
+      "id": "ccc-verdict",
+      "name": "Verdict",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.verdict || \"\") }; }",
+      "idx": 8,
+      "width": 125,
+      "faceted": true
+    },
+    {
+      "id": "ccc-source",
+      "name": "Source",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: String(event.source || \"\") }; }",
+      "idx": 9,
+      "width": 120,
+      "faceted": true
+    },
+    {
+      "id": "ccc-tokens",
+      "name": "Tokens",
+      "handlerTsCode": "(line: Message): CellHandler => { const event = line.json_content || {}; return { text: event.tokens ? JSON.stringify(event.tokens) : \"\", isJson: Boolean(event.tokens) }; }",
+      "idx": 10,
+      "width": 260,
+      "faceted": false
+    }
+  ],
+  "settings": {
+    "leftColWidth": 300,
+    "drawerColWidth": 900,
+    "maxMessages": 100000,
+    "middlewares": [],
+    "entriesOrder": "asc"
+  }
+}

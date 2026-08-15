@@ -1,0 +1,11 @@
+# Disable all end-of-line conversion. This repository is checked out on Windows where
+# core.autocrlf defaults to true, and it contains bytes that must survive a round trip:
+#
+#   - fixtures/*.ndjson are REAL captured vendor streams, and test/spawn.test.js asserts
+#     spawnCapture returns one of them byte-identically. Rewriting LF to CRLF on checkout
+#     would fail that test on a fresh clone while passing for whoever committed it.
+#   - fixtures/*.cmd and src/*.ps1 are executed by the shell; leave their bytes alone.
+#
+# Storing and checking out bytes unchanged is the only behaviour that is correct on every
+# platform here, so it is applied to everything rather than maintained as an exception list.
+* -text

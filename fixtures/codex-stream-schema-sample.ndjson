@@ -1,0 +1,7 @@
+{"type":"thread.started"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"benign hook warning"}}
+{"type":"item.started","item":{"id":"item_6","type":"file_change","changes":[{"path":"ok.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_6","type":"file_change","changes":[{"path":"ok.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_7","type":"agent_message","text":"Created ok.txt."}}
+{"type":"turn.completed"}
