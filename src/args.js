@@ -41,6 +41,33 @@ function validateExecutorEffort(executorEffort) {
 
 export function parseArgs(argv) {
   const command = argv[0];
+  if (argv.length === 1 && (command === 'help' || command === '--help' || command === '-h')) {
+    return { command: 'help' };
+  }
+  if (command === 'doctor') {
+    const { values } = nodeParseArgs({
+      args: argv.slice(1),
+      options: {
+        deep: { type: 'boolean' },
+        'scratch-root': { type: 'string' },
+        repository: { type: 'string' },
+      },
+      allowPositionals: false,
+      strict: true,
+    });
+    return {
+      command,
+      deep: values.deep === true,
+      ...(values['scratch-root'] === undefined ? {} : { scratchRoot: values['scratch-root'] }),
+      ...(values.repository === undefined ? {} : { repository: values.repository }),
+    };
+  }
+  if (command === 'init') {
+    if (argv.length !== 2 || !argv[1]) {
+      throw new Error('usage: init <directory>');
+    }
+    return { command, directory: argv[1] };
+  }
   if (command === 'publish') {
     if (argv.length !== 2 || !argv[1]) {
       throw new Error('usage: publish <run-directory>');

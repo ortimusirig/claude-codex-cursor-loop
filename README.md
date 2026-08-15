@@ -30,10 +30,10 @@ reported as `verifier-failed` — never silently downgraded to a review verdict.
 
 | Requirement | Why | Check |
 |---|---|---|
-| **Node ≥ 24** | runtime | `node --version` |
-| **git** | isolation (worktree / init) | `git --version` |
-| **Codex CLI** | executor seat | `codex --version` |
-| **Cursor Agent CLI** | verifier seat | `agent --version` |
+| **Node ≥ 24** | runtime | `node bin/loop.js doctor` |
+| **git** | isolation (worktree / init) | `node bin/loop.js doctor` |
+| **Codex CLI** | executor seat | `node bin/loop.js doctor --deep` |
+| **Cursor Agent CLI** | verifier seat | `node bin/loop.js doctor --deep` |
 | **Claude Code** | controller seat | — |
 
 The Cursor binary is **`agent`**, not `cursor-agent`.
@@ -53,8 +53,9 @@ node install.mjs
 
 Copies the payload to `~/.claude/skills/run-claude-codex-cursor-loop`, verifies **every file
 by SHA-256**, runs the test suite **from the installed location**, and reports whether `git`,
-`codex`, `agent`, and the optional `gh` publisher are on PATH. Non-zero exit means it did not
-install cleanly.
+`codex`, `agent`, and the optional `gh` publisher are on PATH. Those installer lines report
+presence only. Run `doctor --deep` to prove that Codex can write and Cursor can read. Non-zero
+installer exit means it did not install cleanly.
 
 Options: `--dry-run` (preview, writes nothing), `--name <x>` (install under a different name
 to run side-by-side with an existing copy).
@@ -63,11 +64,29 @@ to run side-by-side with an existing copy).
 
 ```
 node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--quiet]
-node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
+node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
 node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 node bin/loop.js publish <completed-run-directory>
+node bin/loop.js doctor [--deep] [--scratch-root <directory>] [--repository <directory>]
+node bin/loop.js init <directory>
+node bin/loop.js --help
 ```
+
+For a first run, scaffold both inputs and check the machine:
+
+```sh
+node bin/loop.js init /path/to/project
+node bin/loop.js doctor
+node bin/loop.js doctor --deep
+```
+
+`init` never overwrites `plan.md` or `gate.json`. It detects a `package.json` test script;
+otherwise it emits a valid, runnable placeholder gate with an explicit comment telling you to
+replace it. `doctor` runs Node, Git, PATH, scratch-safety, and scratch-writability checks by
+default. The Codex write and Cursor read probes spend real agent tokens, so they are marked
+`SKIP` until `--deep` is supplied. Every probe uses and cleans its own disposable scratch
+directory; neither the target nor a run directory is modified.
 
 | Option | Required | Default | Range |
 |---|---|---|---|

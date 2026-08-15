@@ -8,10 +8,10 @@ below is about the *environment* it drives, not the package.
 
 | Requirement | Why | How to check | How to install |
 |---|---|---|---|
-| **Node ≥ 24** | the skill's runtime | `node --version` | nodejs.org (LTS ≥24) |
-| **git** | isolation (worktree / init) | `git --version` | git-scm.com |
-| **Codex CLI** | the executor seat | `codex --version` | `npm i -g @openai/codex`, then sign in |
-| **Cursor Agent CLI** | the verifier seat | `agent --version` | install Cursor, then `agent login` |
+| **Node ≥ 24** | the skill's runtime | `node bin/loop.js doctor` | nodejs.org (LTS ≥24) |
+| **git** | isolation (worktree / init) | `node bin/loop.js doctor` | git-scm.com |
+| **Codex CLI** | the executor seat | `node bin/loop.js doctor --deep` | `npm i -g @openai/codex`, then sign in |
+| **Cursor Agent CLI** | the verifier seat | `node bin/loop.js doctor --deep` | install Cursor, then `agent login` |
 | **Claude Code** | the controller seat | — | claude.ai/code |
 
 **The binary is `agent`, not `cursor-agent`** (on Windows it lands at
@@ -42,6 +42,8 @@ node install.mjs
 It copies the payload to `~/.claude/skills/run-claude-codex-cursor-loop`, verifies **every
 file by SHA-256**, runs the self-test **from the installed location**, and reports whether
 `git` / `codex` / `agent` are present. A non-zero exit means it did not install cleanly.
+The PATH report proves presence only. After installation, run `node bin/loop.js doctor`; use
+`doctor --deep` to spend one small turn per agent and prove Codex writes and Cursor reads.
 
 Options: `--dry-run` (preview only), `--name <x>` (install under a different skill name,
 e.g. to run side-by-side with an existing install).

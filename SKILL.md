@@ -14,6 +14,16 @@ repeated `--task` per unit):
 
     node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds 1|2|3] [--round N ...] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...]
 
+For a new project, generate both starter inputs without guessing their shapes:
+
+    node bin/loop.js init <folder>
+
+This refuses to overwrite either `plan.md` or `gate.json`. Before spending a full run, check
+the machine with `node bin/loop.js doctor`; then explicitly opt into the token-using Codex
+write and Cursor read probes with `node bin/loop.js doctor --deep`. A skipped deep probe is
+reported as skipped, never passed. GitHub publishing and Logdy are optional and do not affect
+loop health.
+
 For divergent alternatives, give every task a distinct `--perspective`. Candidate batches
 share one base and cannot declare dependencies. Their aggregate is evidence for a planner:
 it includes failed approaches but deliberately computes no winner, ranking, or score.

@@ -92,17 +92,18 @@ if (t.status !== 0) {
 }
 console.log(`self-test: PASS (${pass} tests)`);
 
-// Report vendor CLI availability (informational — the loop preflights these at run time).
+// Report vendor CLI availability (informational presence only — doctor exercises them).
 const probe = process.platform === 'win32' ? 'where' : 'which';
 for (const bin of ['git', 'codex', 'agent', 'gh']) {
   const r = spawnSync(probe, [bin], { encoding: 'utf8' });
   const missing = bin === 'gh'
     ? 'NOT FOUND (needed only for explicit publish)'
     : 'NOT FOUND (needed at run time)';
-  console.log(`${bin}: ${r.status === 0 ? 'found' : missing}`);
+  console.log(`${bin}: ${r.status === 0 ? 'found (presence only)' : missing}`);
 }
 
 const scratch = process.env.CCC_SCRATCH_ROOT ?? (process.platform === 'win32' ? 'C:/ccc/w' : '~/.ccc/w');
 console.log(`\nSKILL_STATUS=INSTALLED name=${skillName}`);
 console.log(`scratch root: ${scratch}  (override with CCC_SCRATCH_ROOT)`);
 console.log(`run: node "${join(dest, 'bin', 'loop.js')}" run --task <plan.md> --target <folder> --gate <gate.json>`);
+console.log(`check: node "${join(dest, 'bin', 'loop.js')}" doctor  (add --deep for token-using write/read probes)`);

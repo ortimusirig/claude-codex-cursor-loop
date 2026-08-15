@@ -11,6 +11,7 @@ import { CAMPAIGN_EVENTS_FILENAME, runCampaign } from '../src/campaign.js';
 import { exitCodeFor } from '../src/exit.js';
 import { formatEventSummary } from '../src/events.js';
 import { formatStatus, readStatus } from '../src/status.js';
+import { CLI_USAGE } from '../src/cli-help.js';
 
 // Short path, outside OneDrive and outside AppData (both are rejected by
 // assertSafeScratchRoot; AppData is MSIX-redirected under a packaged host).
@@ -43,12 +44,46 @@ function createCliReporter({ eventsPath, quiet }) {
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0) {
+    process.stderr.write(`${CLI_USAGE}\n`);
+    process.exitCode = 2;
+    return;
+  }
   let opts;
   try {
-    opts = parseArgs(process.argv.slice(2));
+    opts = parseArgs(argv);
   } catch (e) {
     process.stderr.write(`arg error: ${e.message}\n`);
-    process.exit(2);
+    if (/^unknown command:/.test(e.message)) process.stderr.write(`${CLI_USAGE}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  if (opts.command === 'help') {
+    process.stdout.write(`${CLI_USAGE}\n`);
+    return;
+  }
+  if (opts.command === 'doctor') {
+    const { runDoctor } = await import('../src/doctor.js');
+    const result = await runDoctor({
+      deep: opts.deep,
+      scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
+      repository: opts.repository,
+    });
+    process.stdout.write(result.output);
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  if (opts.command === 'init') {
+    const { scaffold } = await import('../src/init.js');
+    try {
+      const result = scaffold(opts.directory);
+      process.stdout.write(`Created ${result.planPath}\nCreated ${result.gatePath}\n`);
+    } catch (error) {
+      process.stderr.write(`init failed: ${error.message}\n`);
+      process.exitCode = 2;
+    }
+    return;
   }
   if (opts.command === 'status') {
     process.stdout.write(formatStatus(readStatus(opts.runDirectory)));
