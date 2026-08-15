@@ -12,11 +12,16 @@ The controller (this Claude session) authors a plan, then invokes:
 For several plans against the same target and gate, invoke the separate batch engine (one
 repeated `--task` per unit):
 
-    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...]
+    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds 1|2|3] [--round N ...] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...]
 
 For divergent alternatives, give every task a distinct `--perspective`. Candidate batches
 share one base and cannot declare dependencies. Their aggregate is evidence for a planner:
 it includes failed approaches but deliberately computes no winner, ranking, or score.
+For iterative Mode A, set `--rounds` to at most 3 and attribute every predeclared task with
+`--round`, or drive the programmatic API with `maxRounds` and `nextRound`. A next-round
+callback receives completed reviews and supplies different caller-authored plans; the package
+does not call a planner model. All rounds use the campaign base, share one token budget, retain
+all earlier results, and record whether budget, the round cap, or the caller stopped them.
 
 - **Gate config** (`gate.json`): a JSON array of `{ "bin": "...", "args": ["..."] }`; pass/fail is by exit code only.
 - Codex writes only inside a git-isolated copy; the real tree is never touched.

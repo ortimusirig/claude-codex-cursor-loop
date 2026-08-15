@@ -62,7 +62,7 @@ to run side-by-side with an existing copy).
 
 ```
 node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--quiet]
-node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
+node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
 node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 ```
@@ -86,6 +86,8 @@ worktree, gate, two read-only verifier passes, run facts, and `events.jsonl`.
 |---|---:|---|
 | `--concurrency` | 2 | 1–16 simultaneously in-flight units |
 | `--token-budget` | 12,500,000 | positive campaign-wide token count |
+| `--rounds` | 1 | maximum Mode A rounds, from 1–3 |
+| `--round` | 1 | round for each `--task`; when used, give once per `--task` |
 | `--unit-kind` | `candidate` | `candidate`, `node`, or `merge`; give once for every task or once per `--task` |
 | `--unit-id` | generated | stable unit ID; when used, give once per `--task` |
 | `--perspective` | none | declares a Mode A candidate set; give one distinct label per `--task` |
@@ -100,6 +102,19 @@ explicitly passing `unitKind: 'candidate'` through the programmatic API). Every 
 have a distinct, non-empty perspective, all candidates use the same base, and dependency edges
 are rejected before execution. A bare batch without perspectives retains the original
 independent-task behavior for compatibility.
+
+Iterative Mode A is opt-in with `--rounds 2` or `--rounds 3`. Attribute predeclared CLI
+plans with one `--round` per task; perspectives must be distinct within a round, but may recur
+in a later round. The programmatic `runCampaign` API can instead accept `maxRounds` plus a
+`nextRound` callback, which receives the completed round and its attributed reviews before it
+returns the next caller-authored task set. Returning no next round, or returning true from
+`shouldStop`, records `caller-requested`. The tool never generates candidates itself.
+
+Every round isolates its alternatives from the same campaign base. A later round learns from
+earlier findings but does not inherit an earlier candidate's branch. The token budget covers
+the whole campaign: reaching it prevents another round and further dispatch, while units
+already in flight finish. Iteration stops with `budget-exhausted`, `max-rounds-reached`, or
+`caller-requested`; the aggregate retains every completed round either way.
 
 Dependencies are a declared DAG topology: roots fan out up to the concurrency limit, while a
 dependent waits without occupying a slot. After a successful predecessor finishes, its staged
@@ -169,6 +184,11 @@ stream contains campaign and round boundaries plus unit lifecycle records, inclu
 events remain in each unit's own stream. Campaign/round records carry null unit identity
 because they describe no individual unit; unit lifecycle and per-unit records carry the exact
 `campaignId`, round, `unitId`, and `unitKind`.
+
+An iterative aggregate additionally groups `units`, rollups, and alternatives in a `rounds`
+array, adds the round number to every candidate, and records `stopReason`. Its top-level
+`units` and `alternatives.candidates` retain the complete cross-round evidence set. A
+single-round aggregate keeps the original shape exactly and has no iterative-only fields.
 
 The campaign stream also records the shared-base decision, merge-context preparation, and the
 planner data path. Each candidate gets `planner/candidate_generated` with its perspective,

@@ -191,3 +191,40 @@ test('batch stdout is one aggregate JSON document while heartbeats remain on std
     rmSync(fixture.scratchRoot, { recursive: true, force: true });
   }
 });
+
+test('iterative batch CLI emits one grouped aggregate and ordered round boundaries', async () => {
+  const fixture = cliFixture();
+  const batchArgs = [
+    cli,
+    'batch',
+    '--task', 'Round one candidate.', '--round', '1', '--unit-id', 'cli-r1',
+    '--task', 'Round two informed candidate.', '--round', '2', '--unit-id', 'cli-r2',
+    '--perspective', 'minimal-change', '--perspective', 'review-informed',
+    '--rounds', '2',
+    '--target', fixture.args[fixture.args.indexOf('--target') + 1],
+    '--gate', fixture.args[fixture.args.indexOf('--gate') + 1],
+    '--gate-retries', '0',
+    '--token-budget', '1000',
+    '--quiet',
+  ];
+  try {
+    const result = await spawnCapture(process.execPath, batchArgs, { env: fixture.env });
+    assert.equal(result.code, 0, result.stderr);
+    const aggregate = JSON.parse(result.stdout);
+    assert.equal(result.stdout, `${JSON.stringify(aggregate, null, 2)}\n`);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(aggregate.rounds.map((round) => [
+      round.round, ...round.units.map((unit) => unit.unitId),
+    ]), [[1, 'cli-r1'], [2, 'cli-r2']]);
+    assert.equal(aggregate.stopReason, 'max-rounds-reached');
+
+    const events = readFileSync(aggregate.campaignEventsPath, 'utf8')
+      .trim().split(/\r?\n/).map(JSON.parse);
+    const boundaries = events.filter((event) => event.stage === 'round')
+      .map((event) => `${event.round}:${event.type}`);
+    assert.deepEqual(boundaries, ['1:start', '1:finish', '2:start', '2:finish']);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.scratchRoot, { recursive: true, force: true });
+  }
+});

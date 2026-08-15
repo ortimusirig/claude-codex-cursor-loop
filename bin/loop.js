@@ -91,14 +91,19 @@ async function main() {
       eventsPath: campaignEventsPath,
       quiet: opts.quiet,
     });
+    const firstRoundTasks = opts.roundPlans?.[0] ?? opts.tasks;
     const aggregate = await runCampaign({
       campaignId,
-      tasks: opts.candidateSet ? opts.tasks : opts.tasks.map((unit) => {
+      tasks: opts.candidateSet ? firstRoundTasks : firstRoundTasks.map((unit) => {
         if (unit.unitKind !== 'candidate') return unit;
         const { unitKind: _legacyDefault, ...legacyUnit } = unit;
         return legacyUnit;
       }),
       ...(opts.candidateSet ? { candidateSet: true } : {}),
+      ...(opts.roundPlans === undefined ? {} : {
+        maxRounds: opts.maxRounds,
+        roundPlans: opts.roundPlans,
+      }),
       target: opts.target,
       gate: opts.gate,
       concurrency: opts.concurrency,

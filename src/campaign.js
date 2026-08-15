@@ -17,6 +17,13 @@ import { addUsage, EMPTY_USAGE } from './usage.js';
 export const DEFAULT_CONCURRENCY = 2;
 export const MAX_CONCURRENCY = 16;
 export const DEFAULT_TOKEN_BUDGET = 12_500_000;
+export const DEFAULT_ROUNDS = 1;
+export const MAX_ROUNDS = 3;
+export const CAMPAIGN_STOP_REASONS = Object.freeze({
+  BUDGET_EXHAUSTED: 'budget-exhausted',
+  MAX_ROUNDS_REACHED: 'max-rounds-reached',
+  CALLER_REQUESTED: 'caller-requested',
+});
 export { CAMPAIGN_EVENTS_FILENAME } from './event-stream.js';
 
 const KINDS = new Set(UNIT_KINDS);
@@ -289,7 +296,7 @@ function reporterForUnit(factory, unit, identity) {
   };
 }
 
-export async function runCampaign(options) {
+async function runCampaignRound(options) {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('campaign options must be an object');
   }
@@ -309,6 +316,9 @@ export async function runCampaign(options) {
     plannerSynthesis,
     runUnit = realRun,
     candidateSet: candidateSetDeclaration,
+    _emitCampaignLifecycle = true,
+    _campaignBaseReady,
+    _budgetExhaustedAtLimit = false,
   } = options;
   if (typeof campaignId !== 'string' || campaignId === '') {
     throw new TypeError('campaignId must be a non-empty string');
@@ -339,19 +349,21 @@ export async function runCampaign(options) {
   const lifecycle = (runId, stage, type, fields, identity = campaignIdentity) => {
     reportEvent(reporter, runId, stage, type, fields, identity);
   };
-  lifecycle(campaignId, 'campaign', 'start', {
-    unitCount: units.length,
-    concurrency,
-    tokenBudget,
-    ...(candidateSet ? {
-      campaignShape: 'candidate-set',
-      alternatives: true,
-      candidates: units.map((unit) => ({
-        unitId: unit.unitId,
-        perspective: unit.perspective,
-      })),
-    } : { campaignShape: 'task-set', alternatives: false }),
-  });
+  if (_emitCampaignLifecycle) {
+    lifecycle(campaignId, 'campaign', 'start', {
+      unitCount: units.length,
+      concurrency,
+      tokenBudget,
+      ...(candidateSet ? {
+        campaignShape: 'candidate-set',
+        alternatives: true,
+        candidates: units.map((unit) => ({
+          unitId: unit.unitId,
+          perspective: unit.perspective,
+        })),
+      } : { campaignShape: 'task-set', alternatives: false }),
+    });
+  }
   lifecycle(campaignId, 'round', 'start', {
     unitCount: units.length,
     campaignShape: candidateSet ? 'candidate-set' : 'task-set',
@@ -380,6 +392,7 @@ export async function runCampaign(options) {
     });
     try {
       campaignBase ??= await prepareCampaignBase({ target, campaignId, scratchRoot });
+      if (typeof _campaignBaseReady === 'function') _campaignBaseReady(campaignBase);
       lifecycle(campaignId, 'isolate', 'finish', {
         scope: 'campaign-base',
         source: campaignBase.source,
@@ -397,10 +410,12 @@ export async function runCampaign(options) {
         outcome: 'internal-error',
         phase: 'campaign-base',
       });
-      lifecycle(campaignId, 'campaign', 'finish', {
-        outcome: 'internal-error',
-        phase: 'campaign-base',
-      });
+      if (_emitCampaignLifecycle) {
+        lifecycle(campaignId, 'campaign', 'finish', {
+          outcome: 'internal-error',
+          phase: 'campaign-base',
+        });
+      }
       throw error;
     }
   }
@@ -792,7 +807,9 @@ export async function runCampaign(options) {
           inFlight--;
           concluded++;
           settleDependents(unitIndex);
-          if (consumedTokens > tokenBudget) budgetExceeded = true;
+          if (_budgetExhaustedAtLimit
+            ? consumedTokens >= tokenBudget
+            : consumedTokens > tokenBudget) budgetExceeded = true;
           dispatch();
           concludeIfDone();
         });
@@ -961,12 +978,14 @@ export async function runCampaign(options) {
         counts: rollup.counts,
         consumedTokens,
       });
-      lifecycle(campaignId, 'campaign', 'finish', {
-        outcome: 'internal-error',
-        phase: 'planner-synthesis',
-        counts: rollup.counts,
-        consumedTokens,
-      });
+      if (_emitCampaignLifecycle) {
+        lifecycle(campaignId, 'campaign', 'finish', {
+          outcome: 'internal-error',
+          phase: 'planner-synthesis',
+          counts: rollup.counts,
+          consumedTokens,
+        });
+      }
       throw error;
     }
   }
@@ -976,11 +995,13 @@ export async function runCampaign(options) {
     counts: rollup.counts,
     consumedTokens,
   });
-  lifecycle(campaignId, 'campaign', 'finish', {
-    outcome,
-    counts: rollup.counts,
-    consumedTokens,
-  });
+  if (_emitCampaignLifecycle) {
+    lifecycle(campaignId, 'campaign', 'finish', {
+      outcome,
+      counts: rollup.counts,
+      consumedTokens,
+    });
+  }
 
   return {
     campaignId,
@@ -992,4 +1013,310 @@ export async function runCampaign(options) {
     ...(alternatives === null ? {} : { alternatives }),
     ...(plannerSynthesis === undefined ? {} : { planner: { synthesis } }),
   };
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function roundDeclaration(value, name) {
+  if (Array.isArray(value)) return { tasks: value };
+  if (!isRecord(value)) {
+    throw new TypeError(`${name} must be an array of tasks or an object with tasks`);
+  }
+  if (!Array.isArray(value.tasks) || value.tasks.length === 0) {
+    throw new TypeError(`${name}.tasks must be a non-empty array`);
+  }
+  return value;
+}
+
+function iterativeConfiguration(options) {
+  const declaredRounds = options.roundPlans
+    ?? (Array.isArray(options.rounds) ? options.rounds : null);
+  if (declaredRounds !== null && (!Array.isArray(declaredRounds) || declaredRounds.length === 0)) {
+    throw new TypeError('rounds must be a non-empty array');
+  }
+  const numericRounds = typeof options.rounds === 'number' ? options.rounds : undefined;
+  const maxRounds = options.maxRounds
+    ?? numericRounds
+    ?? declaredRounds?.length
+    ?? DEFAULT_ROUNDS;
+  positiveInteger(maxRounds, 'maxRounds', MAX_ROUNDS);
+  if (declaredRounds !== null && declaredRounds.length > maxRounds) {
+    throw new TypeError(`round plans exceed configured maximum of ${maxRounds}`);
+  }
+  return {
+    maxRounds,
+    declarations: declaredRounds?.map((value, index) => (
+      roundDeclaration(value, `rounds[${index}]`)
+    )) ?? null,
+  };
+}
+
+function withRoundUnitIds(tasks, campaignId, round) {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    throw new TypeError(`round ${round} tasks must be a non-empty array`);
+  }
+  return tasks.map((raw, index) => {
+    const generated = `${campaignId}-r${round}-u${String(index + 1).padStart(3, '0')}`;
+    if (!isRecord(raw)) return { task: raw, unitId: generated, unitKind: 'candidate' };
+    if (raw.unitId !== undefined || raw.runId !== undefined) return { ...raw };
+    return { ...raw, unitId: generated };
+  });
+}
+
+function validateIterativeRound(tasks, campaignId, seenUnitIds, expectedBaseRef) {
+  const normalized = normalizeUnits(tasks, 'candidate', campaignId);
+  validateCandidateSet(normalized);
+  validateDependencyGraph(normalized);
+  for (const unit of normalized) {
+    if (seenUnitIds.has(unit.unitId)) {
+      throw new TypeError(`duplicate campaign unitId across rounds: ${unit.unitId}`);
+    }
+  }
+  const baseRef = normalized[0].baseRef ?? 'HEAD';
+  if (expectedBaseRef !== undefined && baseRef !== expectedBaseRef) {
+    throw new Error('every iterative round must use the same campaign base ref');
+  }
+  return { baseRef, unitIds: normalized.map((unit) => unit.unitId) };
+}
+
+function groupedRoundResult(result) {
+  const alternatives = result.alternatives === undefined ? undefined : {
+    ...result.alternatives,
+    candidates: result.alternatives.candidates.map((candidate) => ({
+      ...candidate,
+      round: result.round,
+    })),
+  };
+  return {
+    round: result.round,
+    units: result.units,
+    rollup: result.rollup,
+    ...(alternatives === undefined ? {} : { alternatives }),
+    ...(result.planner === undefined ? {} : { planner: result.planner }),
+  };
+}
+
+function iterativeRollup(rounds, tokenBudget, stopReason) {
+  const units = rounds.flatMap((round) => round.units);
+  const counts = {
+    planned: 0,
+    dispatched: 0,
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+    notDispatched: 0,
+  };
+  let skipped = 0;
+  let tokens = EMPTY_USAGE;
+  for (const round of rounds) {
+    for (const key of Object.keys(counts)) counts[key] += round.rollup.counts[key] ?? 0;
+    skipped += round.rollup.counts.skipped ?? 0;
+    tokens = addUsage(tokens, round.rollup.tokens);
+  }
+  if (skipped > 0) counts.skipped = skipped;
+  const consumedTokens = countUsageTokens(tokens);
+  const everyCandidateFailed = units.length > 0 && units.every((entry) => (
+    (entry.status === 'completed' || entry.status === 'failed')
+      && (entry.status === 'failed' || exitCodeFor(entry.facts?.outcome) !== 0)
+  ));
+  const budgetExceeded = stopReason === CAMPAIGN_STOP_REASONS.BUDGET_EXHAUSTED;
+  return {
+    outcome: everyCandidateFailed
+      ? 'campaign-failed'
+      : budgetExceeded ? 'budget-exhausted' : 'review-ready',
+    counts,
+    tokens,
+    consumedTokens,
+    budgetExceeded,
+    tokenBudget,
+  };
+}
+
+export async function runCampaign(options) {
+  if (!isRecord(options)) throw new TypeError('campaign options must be an object');
+  const configuration = iterativeConfiguration(options);
+  const firstDeclaration = configuration.declarations?.[0];
+
+  // The ordinary path is intentionally the pre-v3-stage-7 function call. In particular,
+  // it adds no stop reason or rounds collection and emits the same lifecycle records.
+  if (configuration.maxRounds === DEFAULT_ROUNDS) {
+    if (firstDeclaration === undefined) return runCampaignRound(options);
+    const {
+      rounds: _rounds,
+      roundPlans: _roundPlans,
+      maxRounds: _maxRounds,
+      nextRound: _nextRound,
+      shouldStop: _shouldStop,
+      ...singleOptions
+    } = options;
+    return runCampaignRound({ ...singleOptions, ...firstDeclaration });
+  }
+
+  if (options.round !== undefined && options.round !== 1) {
+    throw new TypeError('an iterative campaign must start at round 1');
+  }
+  if (options.nextRound !== undefined && typeof options.nextRound !== 'function') {
+    throw new TypeError('nextRound must be a function');
+  }
+  if (options.shouldStop !== undefined && typeof options.shouldStop !== 'function') {
+    throw new TypeError('shouldStop must be a function');
+  }
+  const {
+    campaignId,
+    target,
+    concurrency = DEFAULT_CONCURRENCY,
+    tokenBudget = DEFAULT_TOKEN_BUDGET,
+    reporter,
+    runUnit = realRun,
+  } = options;
+  if (typeof campaignId !== 'string' || campaignId === '') {
+    throw new TypeError('campaignId must be a non-empty string');
+  }
+  positiveInteger(concurrency, 'concurrency', MAX_CONCURRENCY);
+  positiveInteger(tokenBudget, 'tokenBudget');
+  const initial = firstDeclaration ?? { tasks: options.tasks };
+  let next = initial;
+  let campaignBase = options.runOptions?.campaignBase;
+  let expectedBaseRef;
+  let consumedTokens = 0;
+  let stopReason = null;
+  const seenUnitIds = new Set();
+  const completedRounds = [];
+  let campaignStarted = false;
+
+  try {
+    for (let round = 1; round <= configuration.maxRounds; round++) {
+      const tasks = withRoundUnitIds(next.tasks, campaignId, round);
+      const validation = validateIterativeRound(tasks, campaignId, seenUnitIds, expectedBaseRef);
+      expectedBaseRef ??= validation.baseRef;
+      for (const unitId of validation.unitIds) seenUnitIds.add(unitId);
+
+      if (!campaignStarted) {
+        campaignStarted = true;
+        reportEvent(reporter, campaignId, 'campaign', 'start', {
+          unitCount: tasks.length,
+          concurrency,
+          tokenBudget,
+          maxRounds: configuration.maxRounds,
+          campaignShape: 'iterative-candidate-set',
+          alternatives: true,
+          candidates: tasks.map((task) => ({
+            unitId: task.unitId ?? task.runId,
+            perspective: task.perspective,
+          })),
+        }, { campaignId, round: 1, unitId: null, unitKind: null });
+      }
+
+      const remainingBudget = tokenBudget - consumedTokens;
+      if (remainingBudget <= 0) {
+        stopReason = CAMPAIGN_STOP_REASONS.BUDGET_EXHAUSTED;
+        break;
+      }
+      const result = await runCampaignRound({
+        ...options,
+        ...next,
+        tasks,
+        candidateSet: true,
+        round,
+        tokenBudget: remainingBudget,
+        runOptions: {
+          ...options.runOptions,
+          ...(campaignBase === undefined ? {} : { campaignBase }),
+        },
+        _emitCampaignLifecycle: false,
+        _campaignBaseReady: (prepared) => { campaignBase = prepared; },
+        _budgetExhaustedAtLimit: true,
+      });
+      const grouped = groupedRoundResult(result);
+      completedRounds.push(grouped);
+      consumedTokens += result.rollup.consumedTokens;
+
+      if (consumedTokens >= tokenBudget || result.rollup.budgetExceeded) {
+        stopReason = CAMPAIGN_STOP_REASONS.BUDGET_EXHAUSTED;
+        break;
+      }
+      if (round === configuration.maxRounds) {
+        stopReason = CAMPAIGN_STOP_REASONS.MAX_ROUNDS_REACHED;
+        break;
+      }
+      if (options.shouldStop !== undefined && await options.shouldStop({
+        campaignId,
+        round,
+        result: grouped,
+        rounds: completedRounds.map((value) => ({ ...value })),
+        consumedTokens,
+        remainingTokens: tokenBudget - consumedTokens,
+      })) {
+        stopReason = CAMPAIGN_STOP_REASONS.CALLER_REQUESTED;
+        break;
+      }
+
+      let proposed = configuration.declarations?.[round];
+      if (proposed === undefined && options.nextRound !== undefined) {
+        proposed = await options.nextRound({
+          campaignId,
+          round,
+          result: grouped,
+          rounds: completedRounds.map((value) => ({ ...value })),
+          consumedTokens,
+          remainingTokens: tokenBudget - consumedTokens,
+        });
+      }
+      if (proposed === undefined || proposed === null || proposed === false
+        || (isRecord(proposed) && proposed.stop === true)) {
+        stopReason = CAMPAIGN_STOP_REASONS.CALLER_REQUESTED;
+        break;
+      }
+      next = roundDeclaration(proposed, `round ${round + 1}`);
+    }
+
+    stopReason ??= CAMPAIGN_STOP_REASONS.MAX_ROUNDS_REACHED;
+    const rollup = iterativeRollup(completedRounds, tokenBudget, stopReason);
+    const alternativesByRound = completedRounds.map((round) => ({
+      round: round.round,
+      candidates: round.alternatives.candidates,
+    }));
+    const aggregate = {
+      campaignId,
+      target,
+      limits: { concurrency, tokenBudget, maxRounds: configuration.maxRounds },
+      rounds: completedRounds,
+      units: completedRounds.flatMap((round) => round.units),
+      rollup,
+      stopReason,
+      alternatives: {
+        status: 'awaiting-planner-decision',
+        statement: 'These candidates are alternatives for one goal, grouped by round. No selection has been made; a planner must choose, synthesize, or supply another round.',
+        rounds: alternativesByRound,
+        candidates: alternativesByRound.flatMap((round) => round.candidates),
+      },
+    };
+    const finalRound = completedRounds.at(-1)?.round ?? 1;
+    reportEvent(reporter, campaignId, 'campaign', 'finish', {
+      outcome: rollup.outcome,
+      counts: rollup.counts,
+      consumedTokens: rollup.consumedTokens,
+      stopReason,
+      completedRounds: completedRounds.length,
+      maxRounds: configuration.maxRounds,
+    }, { campaignId, round: finalRound, unitId: null, unitKind: null });
+    return aggregate;
+  } catch (error) {
+    if (campaignStarted) {
+      reportEvent(reporter, campaignId, 'campaign', 'finish', {
+        outcome: 'internal-error',
+        phase: 'iterative-rounds',
+        completedRounds: completedRounds.length,
+        error: error instanceof Error ? error.message : String(error),
+      }, {
+        campaignId,
+        round: completedRounds.at(-1)?.round ?? 1,
+        unitId: null,
+        unitKind: null,
+      });
+    }
+    throw error;
+  }
 }

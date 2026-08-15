@@ -1,8 +1,10 @@
 import { parseArgs as nodeParseArgs } from 'node:util';
 import {
   DEFAULT_CONCURRENCY,
+  DEFAULT_ROUNDS,
   DEFAULT_TOKEN_BUDGET,
   MAX_CONCURRENCY,
+  MAX_ROUNDS,
 } from './campaign.js';
 import { UNIT_KINDS } from './events.js';
 
@@ -94,6 +96,8 @@ export function parseArgs(argv) {
       ...(command === 'batch' ? {
         concurrency: { type: 'string' },
         'token-budget': { type: 'string' },
+        rounds: { type: 'string' },
+        round: { type: 'string', multiple: true },
         'unit-kind': { type: 'string', multiple: true },
         'unit-id': { type: 'string', multiple: true },
         perspective: { type: 'string', multiple: true },
@@ -124,6 +128,20 @@ export function parseArgs(argv) {
   }
 
   const tasks = values.task;
+  let maxRounds = strictInt(values.rounds, DEFAULT_ROUNDS, 1, MAX_ROUNDS);
+  const rawTaskRounds = values.round;
+  if (rawTaskRounds !== undefined && rawTaskRounds.length !== tasks.length) {
+    throw new Error('--round must be given once per --task');
+  }
+  const taskRounds = rawTaskRounds?.map((value) => (
+    strictInt(value, undefined, 1, MAX_ROUNDS)
+  ));
+  if (values.rounds === undefined && taskRounds !== undefined) {
+    maxRounds = Math.max(...taskRounds);
+  }
+  if (taskRounds?.some((value) => value > maxRounds)) {
+    throw new Error(`--round cannot exceed configured --rounds ${maxRounds}`);
+  }
   const rawKinds = values['unit-kind'] ?? ['candidate'];
   for (const kind of rawKinds) {
     if (!UNIT_KIND_SET.has(kind)) {
@@ -132,6 +150,9 @@ export function parseArgs(argv) {
   }
   if (rawKinds.length !== 1 && rawKinds.length !== tasks.length) {
     throw new Error('--unit-kind must be given once for all tasks or once per --task');
+  }
+  if (maxRounds > 1 && !rawKinds.every((kind) => kind === 'candidate')) {
+    throw new Error('iterative --rounds may contain only candidate units');
   }
   const unitIds = values['unit-id'];
   if (unitIds !== undefined && unitIds.length !== tasks.length) {
@@ -151,13 +172,26 @@ export function parseArgs(argv) {
     throw new Error('--perspective values must be non-empty');
   }
   if (perspectives !== undefined) {
-    const normalized = perspectives.map((perspective) => perspective.trim().toLocaleLowerCase('en-US'));
-    const duplicateIndex = normalized.findIndex((value, index) => normalized.indexOf(value) !== index);
+    const normalized = perspectives.map((perspective, index) => ({
+      value: perspective.trim().toLocaleLowerCase('en-US'),
+      round: taskRounds?.[index] ?? 1,
+    }));
+    const duplicateIndex = normalized.findIndex((candidate, index) => normalized.some(
+      (other, otherIndex) => otherIndex < index
+        && other.round === candidate.round
+        && other.value === candidate.value,
+    ));
     if (duplicateIndex !== -1) {
       throw new Error(`duplicate --perspective: ${perspectives[duplicateIndex]}`);
     }
   }
   const rawEdges = values['depends-on'] ?? [];
+  if (maxRounds > 1 && perspectives === undefined) {
+    throw new Error('iterative --rounds require one --perspective per --task');
+  }
+  if (maxRounds > 1 && rawEdges.length > 0) {
+    throw new Error('iterative candidate rounds cannot declare --depends-on edges');
+  }
   if (rawEdges.length > 0 && unitIds === undefined) {
     throw new Error('--depends-on requires one --unit-id per --task');
   }
@@ -214,6 +248,19 @@ export function parseArgs(argv) {
       values['token-budget'], DEFAULT_TOKEN_BUDGET, 1, Number.MAX_SAFE_INTEGER,
     ),
   };
+  if (maxRounds > DEFAULT_ROUNDS) {
+    const declaredTaskRounds = taskRounds ?? tasks.map(() => 1);
+    const highestDeclaredRound = Math.max(...declaredTaskRounds);
+    for (let round = 1; round <= highestDeclaredRound; round++) {
+      if (!declaredTaskRounds.includes(round)) {
+        throw new Error(`--round declarations must be contiguous; round ${round} is missing`);
+      }
+    }
+    parsed.maxRounds = maxRounds;
+    parsed.roundPlans = Array.from({ length: highestDeclaredRound }, (_, roundIndex) => (
+      campaignTasks.filter((_, taskIndex) => declaredTaskRounds[taskIndex] === roundIndex + 1)
+    ));
+  }
   if (values.quiet) parsed.quiet = true;
   return parsed;
 }

@@ -194,3 +194,39 @@ test('naming the default unit kind does not turn a batch into a candidate set', 
     true,
     'positive control: perspectives DO make a candidate set, so this is not passing by always returning false');
 });
+
+test('batch parses bounded iterative round plans and groups each task with its round', () => {
+  const parsed = parseArgs([
+    'batch',
+    '--task', 'round one a', '--round', '1', '--unit-id', 'r1-a',
+    '--task', 'round one b', '--round', '1', '--unit-id', 'r1-b',
+    '--task', 'round two a', '--round', '2', '--unit-id', 'r2-a',
+    '--target', 't', '--gate', 'g', '--rounds', '2',
+    '--perspective', 'minimal-change',
+    '--perspective', 'test-first',
+    '--perspective', 'minimal-change',
+  ]);
+
+  assert.equal(parsed.maxRounds, 2);
+  assert.equal(parsed.candidateSet, true);
+  assert.deepEqual(parsed.roundPlans.map((round) => round.map((unit) => unit.unitId)), [
+    ['r1-a', 'r1-b'], ['r2-a'],
+  ]);
+  assert.equal(parsed.roundPlans[0][0].perspective, 'minimal-change');
+  assert.equal(parsed.roundPlans[1][0].perspective, 'minimal-change',
+    'a perspective may recur in a later, better-informed round');
+});
+
+test('round counts above three are rejected during argument parsing', () => {
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--target', 't', '--gate', 'g',
+    '--perspective', 'minimal-change', '--rounds', '4',
+  ]), /range \[1-3\].*4/i);
+});
+
+test('iterative rounds reject non-candidate batch shapes during argument parsing', () => {
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'a', '--target', 't', '--gate', 'g',
+    '--perspective', 'minimal-change', '--unit-kind', 'node', '--rounds', '2',
+  ]), /iterative.*only candidate/i);
+});
