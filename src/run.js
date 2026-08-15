@@ -8,6 +8,7 @@ import {
 } from './executor.js';
 import { runGate as realGate } from './gate.js';
 import {
+  annotateVerifierConsistency,
   DEFAULT_PROMPT,
   DEFAULT_VERIFIER_MODEL,
   INTENT_PROMPT,
@@ -385,16 +386,16 @@ export async function run(opts) {
         verdict: 'produced', file: 'CHANGES.diff',
       });
 
-      const v = await runVerifier({
+      const v = annotateVerifierConsistency(await runVerifier({
         cwd: iso.dir, model: verifierModel, prompt: DEFAULT_PROMPT,
         timeoutMs: stageTimeouts.verifier,
         reporter: eventReporter, runId, pass: 'correctness',
-      });
-      const intentVerifier = await runVerifier({
+      }));
+      const intentVerifier = annotateVerifierConsistency(await runVerifier({
         cwd: iso.dir, model: verifierModel, prompt: INTENT_PROMPT,
         timeoutMs: stageTimeouts.verifier,
         reporter: eventReporter, runId, pass: 'intent',
-      });
+      }));
       if (v.timedOut) {
         timeoutEvents.push({ stage: 'verifier', pass: 'correctness', iteration: n,
           timeoutMs: v.timeoutMs ?? stageTimeouts.verifier });
@@ -422,11 +423,15 @@ export async function run(opts) {
   const verifierFindings = lastVerifier?.findings ?? null;
   const verdictSource = lastVerifier?.verdictSource ?? null;
   const verifierPlan = lastVerifier?.plan ?? null;
+  const verifierEvidence = lastVerifier?.verdictEvidence ?? null;
+  const verifierConsistency = lastVerifier?.verdictConsistency ?? null;
   const lastIntentVerifier = iterations.at(-1)?.intentVerifier;
   const intentVerifierFindings = lastIntentVerifier?.findings ?? null;
   const intentVerdict = lastIntentVerifier?.verdict ?? null;
   const intentVerdictSource = lastIntentVerifier?.verdictSource ?? null;
   const intentVerifierPlan = lastIntentVerifier?.plan ?? null;
+  const intentVerifierEvidence = lastIntentVerifier?.verdictEvidence ?? null;
+  const intentVerifierConsistency = lastIntentVerifier?.verdictConsistency ?? null;
   const tokens = {
     executor: executorUsage,
     verifier: verifierUsage,
@@ -453,8 +458,10 @@ export async function run(opts) {
   const facts = buildRunFacts({ runId, target, dir: iso.dir, isRepo: iso.isRepo,
     baseRef: iso.baseRef, baseCommit: iso.baseCommit, branch: iso.branch,
     iterations, gateStatus, verdict, verdictSource, verifierFindings,
-    verifierPlan, intentVerifierFindings, intentVerdict, intentVerdictSource,
-    intentVerifierPlan, gateFailure, tokens, outcome, gateRetries,
+    verifierPlan, verifierEvidence, verifierConsistency,
+    intentVerifierFindings, intentVerdict, intentVerdictSource,
+    intentVerifierPlan, intentVerifierEvidence, intentVerifierConsistency,
+    gateFailure, tokens, outcome, gateRetries,
     timeouts: stageTimeouts, timeoutEvents,
     supervision: stallConfig ? {
       policy: stallConfig.policy,

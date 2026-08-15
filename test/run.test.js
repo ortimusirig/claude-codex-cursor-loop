@@ -7,7 +7,12 @@ import { parseArgs } from '../src/args.js';
 import { DEFAULT_EXECUTOR_EFFORT, DEFAULT_EXECUTOR_MODEL } from '../src/executor.js';
 import { run, diffText, mergeVerifierVerdicts } from '../src/run.js';
 import { EMPTY_USAGE } from '../src/usage.js';
-import { DEFAULT_PROMPT, DEFAULT_VERIFIER_MODEL, INTENT_PROMPT } from '../src/verifier.js';
+import {
+  DEFAULT_PROMPT,
+  DEFAULT_VERIFIER_MODEL,
+  INTENT_PROMPT,
+  parseVerdictDetail,
+} from '../src/verifier.js';
 import { spawnCapture } from '../src/spawn.js';
 import { exitCodeFor } from '../src/exit.js';
 
@@ -141,6 +146,58 @@ test('executor retries accumulate usage and model overrides reach both agents an
   assert.equal(facts.intentVerifierPlan, '# Intent review\n\nNO_BLOCKERS');
   assert.equal(facts.gateFailure, null);
   rmSync(scr, { recursive: true, force: true });
+});
+
+test('a retained-evidence disagreement is reported without failing a completed run', async () => {
+  const scr = scratch();
+  const target = makeTarget();
+  try {
+    const contradictory = parseVerdictDetail(JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false,
+      result: 'A blocking defect remains.\n\nISSUES',
+    }));
+    const clean = parseVerdictDetail(JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false,
+      result: 'The intent is satisfied.\n\nNO_BLOCKERS',
+    }));
+    const facts = await run({
+      task: 'do the task', target, gate: [], gateRetries: 0,
+      scratchRoot: scr, runId: 'verdict-disagreement',
+      adapters: {
+        runExecutor: writingExecutor,
+        runGate: async () => ({ passed: true, results: [] }),
+        runVerifier: async ({ prompt }) => prompt === INTENT_PROMPT
+          ? {
+              verdict: clean.verdict,
+              verdictSource: clean.source,
+              verdictEvidence: clean.evidence,
+              launchFailed: false,
+            }
+          : {
+              // Simulate a harness bookkeeping defect: the recorded value does
+              // not match the exact retained text, but verification completed.
+              verdict: 'NO_BLOCKERS',
+              verdictSource: contradictory.source,
+              verdictEvidence: contradictory.evidence,
+              launchFailed: false,
+            },
+      },
+    });
+
+    assert.equal(facts.outcome, 'review-ready', 'bookkeeping must not fail the run');
+    assert.equal(facts.verifierConsistency.status, 'disagreement');
+    assert.equal(facts.verifierConsistency.recordedVerdict, 'NO_BLOCKERS');
+    assert.equal(facts.verifierConsistency.rederivedVerdict, 'ISSUES');
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    assert.equal(persisted.verifierConsistency.status, 'disagreement');
+    assert.equal(persisted.iterations[0].verifier.verdictConsistency.status, 'disagreement');
+    const report = readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8');
+    assert.match(report, /bookkeeping disagreement/i);
+    assert.match(report, /recorded NO_BLOCKERS\/result; re-derived ISSUES\/result/i);
+  } finally {
+    rmSync(scr, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
 });
 
 test('omitted model flags travel through the CLI path to both agents and run-fact defaults', async () => {

@@ -19,10 +19,14 @@ export function buildRunFacts({
   verdictSource = null,
   verifierFindings,
   verifierPlan = null,
+  verifierEvidence = null,
+  verifierConsistency = null,
   intentVerifierFindings,
   intentVerdict = null,
   intentVerdictSource = null,
   intentVerifierPlan = null,
+  intentVerifierEvidence = null,
+  intentVerifierConsistency = null,
   gateFailure = null,
   tokens = {},
   models = {},
@@ -54,10 +58,14 @@ export function buildRunFacts({
     verdictSource: verdictSource ?? null,
     verifierFindings: verifierFindings ?? null,
     verifierPlan: verifierPlan ?? null,
+    verifierEvidence: verifierEvidence ?? null,
+    verifierConsistency: verifierConsistency ?? null,
     intentVerifierFindings: intentVerifierFindings ?? null,
     intentVerdict: intentVerdict ?? null,
     intentVerdictSource: intentVerdictSource ?? null,
     intentVerifierPlan: intentVerifierPlan ?? null,
+    intentVerifierEvidence: intentVerifierEvidence ?? null,
+    intentVerifierConsistency: intentVerifierConsistency ?? null,
     gateFailure: gateFailure ?? null,
     tokens: {
       executor: addUsage(EMPTY_USAGE, tokens?.executor),
@@ -128,6 +136,8 @@ export function buildReportMarkdown(facts, {
     `- **Gate:** ${facts.gateStatus}`,
     `- **Verdict:** ${facts.verdict ?? 'n/a'} (source: ${facts.verdictSource ?? 'n/a'})`,
     `- **Intent verdict:** ${facts.intentVerdict ?? 'n/a'} (source: ${facts.intentVerdictSource ?? 'n/a'})`,
+    `- **Verdict evidence consistency:** ${facts.verifierConsistency?.status ?? 'n/a'}`,
+    `- **Intent evidence consistency:** ${facts.intentVerifierConsistency?.status ?? 'n/a'}`,
     `- **Base ref:** ${facts.baseRef}`,
     `- **Base commit:** ${facts.baseCommit}`,
     `- **Branch:** ${facts.branch}`,
@@ -154,6 +164,31 @@ export function buildReportMarkdown(facts, {
       : []),
     ...(facts.intentVerdictSource === 'none'
       ? [``, `Intent verifier: no verdict marker was found; ISSUES is the fail-safe default.`]
+      : []),
+    ...(facts.verifierConsistency?.status === 'disagreement'
+      ? [
+          ``,
+          `Correctness verifier bookkeeping disagreement: recorded `
+            + `${facts.verifierConsistency.recordedVerdict}/${facts.verifierConsistency.recordedSource}; `
+            + `re-derived ${facts.verifierConsistency.rederivedVerdict}/`
+            + `${facts.verifierConsistency.rederivedSource} from retained evidence.`,
+        ]
+      : []),
+    ...(facts.intentVerifierConsistency?.status === 'disagreement'
+      ? [
+          ``,
+          `Intent verifier bookkeeping disagreement: recorded `
+            + `${facts.intentVerifierConsistency.recordedVerdict}/`
+            + `${facts.intentVerifierConsistency.recordedSource}; re-derived `
+            + `${facts.intentVerifierConsistency.rederivedVerdict}/`
+            + `${facts.intentVerifierConsistency.rederivedSource} from retained evidence.`,
+        ]
+      : []),
+    ...(facts.verifierEvidence?.inputTruncated
+      ? [``, `Correctness verifier evidence was truncated before judgment; the retained text is the complete judged input.`]
+      : []),
+    ...(facts.intentVerifierEvidence?.inputTruncated
+      ? [``, `Intent verifier evidence was truncated before judgment; the retained text is the complete judged input.`]
       : []),
     ``,
     `## What changed`,

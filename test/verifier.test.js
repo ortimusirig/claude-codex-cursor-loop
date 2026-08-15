@@ -61,6 +61,9 @@ test('runVerifier reports findings on the path where the verifier ran', async ()
   assert.match(r.findings, /a bug on line 4/);
   assert.match(r.plan, /Fake review plan/);
   assert.match(r.plan, /Retained review details/);
+  assert.equal(r.verdictConsistency.status, 'consistent');
+  assert.equal(r.verdictEvidence.judgedText, r.verdictEvidence.candidates.result.text);
+  assert.equal(r.plan, r.verdictEvidence.candidates.plan.text);
   assert.deepEqual(r.usage, {
     inputTokens: 10,
     cachedInputTokens: 3,
