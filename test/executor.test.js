@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodexArgs,
@@ -63,6 +65,39 @@ test('runExecutor parses file_change and agent_message from the stream', async (
     bin: process.execPath, extraArgv: [fakeCodex] });
   assert.deepEqual(r.changedFiles, ['a.py', 'b.py']);
   assert.equal(r.lastMessage, 'implemented the thing');
+});
+
+test('runExecutor reports a completed item before the vendor process exits', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ccc-executor-incremental-'));
+  const exitMarker = join(directory, 'vendor-exited.txt');
+  const events = [];
+  const script = [
+    'const { writeFileSync } = require("node:fs")',
+    `const marker = ${JSON.stringify(exitMarker)}`,
+    'const changed = {type:"item.completed",item:{type:"file_change",changes:[{path:"early.js"}]}}',
+    'process.stdout.write(JSON.stringify(changed) + "\\n")',
+    'setTimeout(() => { writeFileSync(marker, "exited") }, 300)',
+  ].join(';');
+  try {
+    const result = await runExecutor({
+      plan: 'observe incrementally', cwd: directory,
+      bin: process.execPath, extraArgv: ['-e', script],
+      reporter: (event) => events.push({
+        event,
+        vendorHadExited: existsSync(exitMarker),
+      }),
+      runId: 'incremental-order', attempt: 1, timeoutMs: 5000,
+    });
+    assert.deepEqual(result.changedFiles, ['early.js']);
+    const fileChange = events.find(({ event }) => event.type === 'file_change');
+    assert.ok(fileChange, 'positive setup: the fixture must produce a file-change event');
+    assert.equal(fileChange.vendorHadExited, false,
+      'the item must reach the reporter while the process is still alive');
+    assert.equal(existsSync(exitMarker), true,
+      'positive control: the process must write its exit marker before runExecutor returns');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('parseCodexStream handles the real wrapped item.completed schema, ignores errors and item.started', () => {

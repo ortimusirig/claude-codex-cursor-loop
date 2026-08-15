@@ -148,7 +148,19 @@ export async function spawnCapture(bin, args, opts = {}) {
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) onAbort();
     }
-    child.stdout.on('data', (d) => outChunks.push(d));
+    child.stdout.on('data', (d) => {
+      outChunks.push(d);
+      if (typeof opts.onStdout === 'function') {
+        try {
+          // Observation is additive: keep the vendor-owned chunk in the capture and hand
+          // observers a copy, so mutation or failure cannot change returned stdout.
+          const observed = opts.onStdout(Buffer.from(d));
+          if (observed && typeof observed.catch === 'function') observed.catch(() => {});
+        } catch {
+          // Capture is part of the run; an optional observer is disposable.
+        }
+      }
+    });
     child.stderr.on('data', (d) => errChunks.push(d));
     child.on('error', (error) => {
       if (timer) clearTimeout(timer);

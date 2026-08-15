@@ -2,6 +2,7 @@ import { spawnCapture } from './spawn.js';
 import { reportEvent } from './events.js';
 import { EMPTY_USAGE, normalizeCodexUsage } from './usage.js';
 import { resolveStageTimeouts } from './timeouts.js';
+import { StringDecoder } from 'node:string_decoder';
 
 export const DEFAULT_EXECUTOR_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_EXECUTOR_EFFORT = 'xhigh';
@@ -65,6 +66,62 @@ export function parseCodexStream(streamText) {
   return { changedFiles, lastMessage, usage };
 }
 
+function createIncrementalReporter({ reporter, runId, attempt }) {
+  const decoder = new StringDecoder('utf8');
+  const seenFiles = new Set();
+  let pending = '';
+
+  const observeLine = (line) => {
+    const source = line.trim();
+    if (source === '') return;
+    let event;
+    try { event = JSON.parse(source); } catch { return; }
+    if (event?.type !== 'item.completed' || !event.item) return;
+
+    const item = event.item;
+    let reported = false;
+    if (item.type === 'file_change' && Array.isArray(item.changes)) {
+      for (const change of item.changes) {
+        if (!change || typeof change.path !== 'string' || seenFiles.has(change.path)) continue;
+        seenFiles.add(change.path);
+        reported = true;
+        reportEvent(reporter, runId, 'executor', 'file_change', {
+          file: change.path, attempt,
+        });
+      }
+    }
+    // Every completed item is observable activity. A file-change item already reports its
+    // paths; all other items (and duplicate/empty file-change items) get one progress event.
+    if (!reported) {
+      reportEvent(reporter, runId, 'executor', 'item_completed', {
+        itemType: typeof item.type === 'string' ? item.type : 'unknown', attempt,
+      });
+    }
+  };
+
+  const consumeCompleteLines = () => {
+    let newline;
+    while ((newline = pending.indexOf('\n')) !== -1) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      observeLine(line);
+    }
+  };
+
+  return {
+    onStdout(chunk) {
+      pending += decoder.write(chunk);
+      consumeCompleteLines();
+    },
+    finish() {
+      pending += decoder.end();
+      consumeCompleteLines();
+      if (pending !== '') observeLine(pending);
+      pending = '';
+    },
+  };
+}
+
 export async function runExecutor({
   plan,
   cwd,
@@ -80,14 +137,18 @@ export async function runExecutor({
 }) {
   const args = [...extraArgv, ...buildCodexArgs({ cwd, model, effort })];
   reportEvent(reporter, runId, 'executor', 'start', { bin, args, attempt });
-  const r = await spawnCapture(bin, args, { cwd, input: plan, timeoutMs, signal });
+  // Executor launches are special: healthy Codex turns often outlive the watchdog gap,
+  // unlike the shorter gate/verify commands. Observe its NDJSON as it arrives so the gap
+  // remains a gap measurement; spawnCapture still retains and returns every original byte.
+  const observer = typeof reporter === 'function'
+    ? createIncrementalReporter({ reporter, runId, attempt })
+    : null;
+  const r = await spawnCapture(bin, args, {
+    cwd, input: plan, timeoutMs, signal,
+    ...(observer ? { onStdout: observer.onStdout } : {}),
+  });
+  observer?.finish();
   const parsed = parseCodexStream(r.stdout);
-  // spawnCapture's complete stdout buffer is a compatibility contract. File changes are
-  // therefore reported after the process closes rather than weakening that buffer for
-  // incremental observation.
-  for (const file of parsed.changedFiles) {
-    reportEvent(reporter, runId, 'executor', 'file_change', { file, attempt });
-  }
   reportEvent(reporter, runId, 'executor', 'finish', {
     code: r.code, tokens: parsed.usage, timedOut: r.timedOut, attempt,
   });

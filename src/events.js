@@ -11,6 +11,7 @@ export const EVENT_TYPES = Object.freeze([
   'start',
   'finish',
   'file_change',
+  'item_completed',
   'gate_command',
   'retry',
   'verdict',
@@ -80,6 +81,9 @@ function detailFor(event) {
   }
   if (event.stage === 'executor' && event.type === 'file_change') {
     return `file=${oneLine(event.file)}${attempt}`;
+  }
+  if (event.stage === 'executor' && event.type === 'item_completed') {
+    return `item=${oneLine(event.itemType)}${attempt}`;
   }
   if (event.stage === 'executor' && event.type === 'start') {
     return `started ${oneLine(event.bin)}${attempt}`;

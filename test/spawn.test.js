@@ -51,6 +51,25 @@ test('returns a known NDJSON fixture stdout byte-identically in full', async () 
     'the complete returned stdout must retain every fixture byte');
 });
 
+test('incremental stdout observation preserves known fixture bytes exactly', async () => {
+  const fixture = fileURLToPath(new URL('../fixtures/codex-stream-schema-sample.ndjson', import.meta.url));
+  const expected = readFileSync(fixture);
+  const observed = [];
+  const r = await spawnCapture(process.execPath, [
+    '-e',
+    'process.stdout.write(require("node:fs").readFileSync(process.argv[1]))',
+    fixture,
+  ], { onStdout: (chunk) => {
+    observed.push(chunk);
+    throw new Error('observation failure must stay contained');
+  } });
+  assert.equal(r.code, 0);
+  assert.ok(Buffer.from(r.stdout, 'utf8').equals(expected),
+    'activating observation must not change any byte of returned stdout');
+  assert.ok(Buffer.concat(observed).equals(expected),
+    'even a failing additive observer must see the same complete byte sequence');
+});
+
 test('runs a .cmd on Windows and preserves space-bearing args', { skip: process.platform !== 'win32' }, async () => {
   const cmd = fileURLToPath(new URL('../fixtures/echoargs.cmd', import.meta.url));
   const r = await spawnCapture(cmd, ['hello', 'a b c']);
