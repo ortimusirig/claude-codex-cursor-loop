@@ -1,10 +1,16 @@
-# Harness artifacts — written into a run's isolated directory, never part of the product.
-# Kept in sync with HARNESS_ARTIFACTS in src/run.js.
-TASK.md
-CHANGES.diff
-ccc-report.md
-ccc-runfacts.json
-events.jsonl
+# NOTE: harness artifacts (TASK.md, CHANGES.diff, ccc-report.md, ccc-runfacts.json,
+# events.jsonl) are deliberately NOT listed here.
+#
+# Isolation uses `git worktree`, so a worktree inherits this file. The loop stages with
+#   git add -A -- . :(exclude)TASK.md :(exclude)events.jsonl ...
+# and git fails that command outright when the pathspec matches ignored paths:
+#   "The following paths are ignored by one of your .gitignore files"
+# which is a non-zero exit, so diffText throws and the run dies after a green gate.
+#
+# The pathspec exclusion in src/run.js (HARNESS_ARTIFACTS) is the mechanism that keeps
+# these files out of CHANGES.diff. Ignoring them here does not add safety — it breaks the
+# mechanism. If one ever leaks into this tree, `git status` showing it is the desired
+# outcome, not something to suppress.
 
 # Test scratch directories, if a test ever creates one in-tree.
 .ccc-test-*/
@@ -15,4 +21,3 @@ events.jsonl
 # Node — this package has zero runtime dependencies and no build step, but a stray
 # install should not be committed.
 node_modules/
-*.log
