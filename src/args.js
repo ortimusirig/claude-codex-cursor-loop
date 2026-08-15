@@ -41,6 +41,12 @@ function validateExecutorEffort(executorEffort) {
 
 export function parseArgs(argv) {
   const command = argv[0];
+  if (command === 'publish') {
+    if (argv.length !== 2 || !argv[1]) {
+      throw new Error('usage: publish <run-directory>');
+    }
+    return { command, runDirectory: argv[1] };
+  }
   if (command === 'status') {
     if (argv.length !== 2 || !argv[1]) {
       throw new Error('usage: status <run-directory>');

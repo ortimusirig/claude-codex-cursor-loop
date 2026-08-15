@@ -65,6 +65,7 @@ node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.
 node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
 node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
+node bin/loop.js publish <completed-run-directory>
 ```
 
 | Option | Required | Default | Range |
@@ -166,6 +167,26 @@ error; multi-word inline prose is used verbatim.
 
 An unrecognised outcome exits 3 rather than 0, so an outcome added later cannot silently
 become a success.
+
+### Optional Forgejo publishing
+
+Forgejo is the primary target; Gitea exposes the same API. Install the Forgejo binary, run
+`forgejo web`, finish setup at `http://localhost:3000`, and create the destination repository
+and a repository-write access token. Set the three values only in the publisher's environment:
+
+```sh
+export CCC_FORGE_URL=http://localhost:3000
+export CCC_FORGE_REPOSITORY=owner/repository
+export CCC_FORGE_TOKEN=the-access-token
+node bin/loop.js publish /path/to/completed/run/w
+```
+
+The explicit command pushes the reviewed branch, creates or updates one pull request, posts
+both verifier passes as pull reviews, prints the PR URL, and records it in `ccc-forge.json`.
+It is never called by `run` or `batch`. Failed publishing leaves the completed run unchanged.
+
+Forgejo is GPLv3-or-later. Running it imposes no licence obligations. Gitea is MIT if that is
+preferred.
 
 Each run writes `ccc-runfacts.json`, `ccc-report.md`, and append-only `events.jsonl` into the
 isolated directory, plus a branch and a diff to review. Stdout remains exactly one JSON

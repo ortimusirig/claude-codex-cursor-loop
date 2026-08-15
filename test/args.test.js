@@ -59,6 +59,14 @@ test('parses status with exactly one run directory', () => {
   assert.throws(() => parseArgs(['status', 'one', 'two']), /status <run-directory>/);
 });
 
+test('parses publish with exactly one completed run directory', () => {
+  assert.deepEqual(parseArgs(['publish', 'C:/ccc/w/run/w']), {
+    command: 'publish', runDirectory: 'C:/ccc/w/run/w',
+  });
+  assert.throws(() => parseArgs(['publish']), /publish <run-directory>/);
+  assert.throws(() => parseArgs(['publish', 'one', 'two']), /publish <run-directory>/);
+});
+
 test('parses dashboard run, scratch-root, and port forms without ambiguity', () => {
   assert.deepEqual(parseArgs(['dashboard', 'C:/ccc/w/a', '--port', '8123']), {
     command: 'dashboard', runDirectory: 'C:/ccc/w/a', port: 8123,

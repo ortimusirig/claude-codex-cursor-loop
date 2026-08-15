@@ -10,6 +10,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const licensePath = fileURLToPath(new URL('../LICENSE', import.meta.url));
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url));
 const installerPath = fileURLToPath(new URL('../install.mjs', import.meta.url));
+const cliPath = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
+const runPath = fileURLToPath(new URL('../src/run.js', import.meta.url));
 const logdyConfigPath = fileURLToPath(new URL('../docs/optional-tools/logdy-run-events.json', import.meta.url));
 const verifierPluginManifestPath = fileURLToPath(new URL('../cursor-plugin/.cursor-plugin/plugin.json', import.meta.url));
 const verifierSkillPath = fileURLToPath(new URL('../cursor-plugin/skills/ccc-verify/SKILL.md', import.meta.url));
@@ -55,6 +57,18 @@ test('the installer payload includes every shippable top-level entry', () => {
     .filter((name) => !name.startsWith('.') && !repositoryOnly.has(name));
   const omitted = shippable.filter((name) => !payload.includes(name));
   assert.deepEqual(omitted, [], `PAYLOAD omits shippable root entries: ${omitted.join(', ')}`);
+});
+
+test('forge publishing is lazy and absent from the run implementation', () => {
+  const cli = readFileSync(cliPath, 'utf8');
+  const run = readFileSync(runPath, 'utf8');
+  assert.doesNotMatch(cli, /^import .*forge-publisher/m,
+    'a static publisher import would put forge checks on every run and batch launch');
+  assert.match(cli,
+    /opts\.command === 'publish'[\s\S]*await import\('\.\.\/src\/forge-publisher\.js'\)/,
+    'only the explicit publish branch may load the publisher');
+  assert.doesNotMatch(run, /forge-publisher|publishRunToForge|CCC_FORGE_/,
+    'the run implementation must not import, invoke, or configure publishing');
 });
 
 test('the shipped ccc-verify skill carries the strict verdict and assertion-audit contracts', () => {

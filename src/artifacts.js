@@ -5,6 +5,7 @@ export const HARNESS_ARTIFACTS = Object.freeze([
   'CHANGES.diff',
   'ccc-report.md',
   'ccc-runfacts.json',
+  'ccc-forge.json',
   'ccc-merge-resolutions.json',
   'events.jsonl',
   'campaign-events.jsonl',

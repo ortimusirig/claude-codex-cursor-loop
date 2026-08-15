@@ -71,6 +71,19 @@ async function main() {
     }
     return;
   }
+  if (opts.command === 'publish') {
+    // Publishing is deliberately absent from the run path. Load its filesystem, Git,
+    // and HTTP code only after the operator selects this separate command.
+    const { publishRunToForge, redactForgeError } = await import('../src/forge-publisher.js');
+    try {
+      const published = await publishRunToForge({ runDirectory: opts.runDirectory });
+      process.stdout.write(`${published.url}\n`);
+    } catch (error) {
+      process.stderr.write(`publish failed: ${redactForgeError(error)}\n`);
+      process.exit(2);
+    }
+    return;
+  }
   const pf = await preflight({
     task: opts.command === 'run' ? opts.task : undefined,
     tasks: opts.command === 'batch' ? opts.tasks.map((unit) => unit.task) : undefined,
