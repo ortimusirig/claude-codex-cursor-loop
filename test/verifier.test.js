@@ -36,6 +36,13 @@ function rewriteEvents(streamText, rewrite) {
     .join('\n');
 }
 
+function planArtifactStream(plan) {
+  return JSON.stringify({
+    type: 'tool_call', subtype: 'completed',
+    tool_call: { createPlanToolCall: { args: { name: '', overview: '', plan } } },
+  });
+}
+
 test('parseVerdictDetail keeps the review text, not just the verdict', () => {
   const stream = JSON.stringify({
     type: 'result', subtype: 'success', is_error: false,
@@ -385,6 +392,67 @@ test('a plan line beginning with a formatted ISSUES token is conclusive', () => 
   const detail = parseVerdictDetail(streamText);
   assert.equal(detail.verdict, 'ISSUES');
   assert.equal(detail.source, 'plan');
+});
+
+test('the exact ISSUES/none prose line is not a plan verdict declaration', () => {
+  const line = '- ISSUES/`none` vs real ISSUES: existing page test asserts distinct fail-safe vs reviewer';
+  const detail = parseVerdictDetail(planArtifactStream(line));
+
+  assert.equal(detail.verdict, 'ISSUES', 'an absent verdict must remain fail-safe');
+  assert.equal(detail.source, 'none');
+  assert.equal(detail.planText, line);
+});
+
+test('all observed genuine plan verdict lines remain conclusive', () => {
+  const cases = [
+    ['NO_BLOCKERS', 'NO_BLOCKERS'],
+    ['**NO_BLOCKERS** — no correctness defects that block the requested change', 'NO_BLOCKERS'],
+    ['**ISSUES** — one blocking test bug; rest of the diff looks correct', 'ISSUES'],
+    ['**ISSUES** — journal campaign attribution is claimed closed but cannot work', 'ISSUES'],
+  ];
+
+  for (const [line, verdict] of cases) {
+    const detail = parseVerdictDetail(planArtifactStream(line));
+    assert.equal(detail.verdict, verdict, line);
+    assert.equal(detail.source, 'plan', line);
+    assert.equal(detail.planText, line, line);
+  }
+});
+
+test('a plan artifact containing only prose mentions has no verdict source', () => {
+  const detail = parseVerdictDetail(planArtifactStream([
+    'The protocol distinguishes NO_BLOCKERS from ISSUES.',
+    'ISSUES/none describes the fail-safe path.',
+    'NO_BLOCKERS-leaning prose is not a declaration.',
+  ].join('\n')));
+
+  assert.equal(detail.verdict, 'ISSUES', 'an absent verdict must remain fail-safe');
+  assert.equal(detail.source, 'none');
+});
+
+test('genuine conflicting plan verdict lines still resolve to ISSUES', () => {
+  const detail = parseVerdictDetail(planArtifactStream([
+    'NO_BLOCKERS — initial assessment',
+    'ISSUES: one blocking defect remains',
+  ].join('\n')));
+
+  assert.equal(detail.verdict, 'ISSUES');
+  assert.equal(detail.source, 'plan');
+});
+
+test('plan verdict tokens followed by sentence punctuation remain conclusive', () => {
+  const lines = [
+    'NO_BLOCKERS,no blocking defects found',
+    'NO_BLOCKERS:no blocking defects found',
+    'NO_BLOCKERS.',
+    'NO_BLOCKERS—no blocking defects found',
+  ];
+
+  for (const line of lines) {
+    const detail = parseVerdictDetail(planArtifactStream(line));
+    assert.equal(detail.verdict, 'NO_BLOCKERS', line);
+    assert.equal(detail.source, 'plan', line);
+  }
 });
 
 test('both qualifying plan tokens resolve to ISSUES', () => {

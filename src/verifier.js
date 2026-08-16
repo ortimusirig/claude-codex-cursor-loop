@@ -102,7 +102,8 @@ function finalLineVerdict(text) {
 function planVerdict(text) {
   const verdicts = new Set();
   for (const line of text.split(/\r?\n/)) {
-    const match = /^(NO_BLOCKERS|ISSUES)(?![A-Z0-9_])/.exec(stripLeadingVerdictNoise(line));
+    const match = /^(NO_BLOCKERS|ISSUES)(?:[*`]+)?(?=$|[\s,.!?;:…—])/
+      .exec(stripLeadingVerdictNoise(line));
     if (match) verdicts.add(match[1]);
   }
   if (verdicts.has('ISSUES')) return 'ISSUES';
