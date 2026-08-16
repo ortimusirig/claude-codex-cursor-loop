@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Portable installer for the ccc-loop skill.
+// Portable installer for the claude-codex-cursor-loop skill.
 // Cross-platform, zero dependencies, no PowerShell or bash required.
 //
-//   node install.mjs            install to ~/.claude/skills/ccc-loop
+//   node install.mjs            install to ~/.claude/skills/claude-codex-cursor-loop
 //   node install.mjs --name X   install under a different skill name
 //   node install.mjs --dry-run  show what would happen, change nothing
 //
@@ -27,7 +27,7 @@ const PAYLOAD = ['package.json', 'SKILL.md', 'README.md', 'LICENSE', 'PORTING.md
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const nameIdx = args.indexOf('--name');
-const skillName = nameIdx >= 0 ? args[nameIdx + 1] : 'ccc-loop';
+const skillName = nameIdx >= 0 ? args[nameIdx + 1] : 'claude-codex-cursor-loop';
 const skillsDirectory = join(homedir(), '.claude', 'skills');
 const dest = join(skillsDirectory, skillName);
 // Keep the superseded name constructible for upgrade detection without retaining it as
@@ -63,7 +63,7 @@ console.log(`source: ${SRC}`);
 console.log(`target: ${dest}`);
 if (existsSync(previousDest)) {
   console.warn(`WARNING: previous skill install detected: ${previousDest}`);
-  console.warn('That directory is now superseded by ccc-loop and would leave the host with two equivalent skills.');
+  console.warn('That directory is now superseded by claude-codex-cursor-loop and would leave the host with two equivalent skills.');
   console.warn('After checking the path, remove the previous install manually with exactly:');
   console.warn(`  ${removalCommand(previousDest)}`);
 }

@@ -1,11 +1,11 @@
-# Moving ccc-loop between machines
+# Moving claude-codex-cursor-loop between machines
 
 Installation and first-run commands live in [README.md](README.md). The details below are
 the machine-specific state that does not move with a copied checkout or installed skill.
 
 ## Authentication is per machine
 
-ccc-loop stores and transfers no credentials. On every new machine, sign the Codex CLI in
+claude-codex-cursor-loop stores and transfers no credentials. On every new machine, sign the Codex CLI in
 with its own ChatGPT/OpenAI account and run `agent login` for the Cursor Agent CLI with its
 own Cursor account. Both use interactive browser flows, so run them in a real terminal; an
 installer or copied configuration cannot complete them. Cost follows those subscriptions.
@@ -30,6 +30,6 @@ that Codex can write and Cursor can read on that machine.
 Run state is machine-local. The scratch root defaults to `C:/ccc/w` on Windows and
 `~/.ccc/w` elsewhere; set `CCC_SCRATCH_ROOT` to override it on the new machine.
 
-The scratch root must not be inside AppData or OneDrive. ccc-loop rejects those locations:
+The scratch root must not be inside AppData or OneDrive. claude-codex-cursor-loop rejects those locations:
 AppData can be redirected by packaged hosts, while OneDrive can synchronize partial writes
 and create paths long enough to break tools. Choose a short, writable, local path instead.

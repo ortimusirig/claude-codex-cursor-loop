@@ -1,4 +1,4 @@
-# ccc-loop
+# claude-codex-cursor-loop
 
 [![tests](https://github.com/ortimusirig/claude-codex-cursor-loop/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/claude-codex-cursor-loop/actions/workflows/tests.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
 
@@ -69,7 +69,7 @@ POSIX `which`, plain `spawn` — but treat the first Unix run as verification.
 node install.mjs
 ```
 
-Copies the payload to `~/.claude/skills/ccc-loop`, verifies **every file
+Copies the payload to `~/.claude/skills/claude-codex-cursor-loop`, verifies **every file
 by SHA-256**, runs the test suite **from the installed location**, and reports whether `git`,
 `codex`, `agent`, and the optional `gh` publisher are on PATH. Those installer lines report
 presence only. Run `doctor --deep` to prove that Codex can write and Cursor can read. Non-zero

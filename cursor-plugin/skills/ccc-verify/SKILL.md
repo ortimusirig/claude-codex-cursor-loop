@@ -1,6 +1,6 @@
 ---
 name: ccc-verify
-description: Audit CHANGES.diff for correctness or against TASK.md, including assertion quality, and return the strict ccc verifier verdict. Use for the correctness and intent verifier passes in ccc-loop.
+description: Audit CHANGES.diff for correctness or against TASK.md, including assertion quality, and return the strict ccc verifier verdict. Use for the correctness and intent verifier passes in claude-codex-cursor-loop.
 disable-model-invocation: true
 ---
 
