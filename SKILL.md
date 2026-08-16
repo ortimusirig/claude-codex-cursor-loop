@@ -7,12 +7,12 @@ description: Run isolated Codex implementation and read-only Cursor verification
 
 The controller (this Claude session) authors a plan, then invokes:
 
-    node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL]
+    node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--port PORT] [--open] [--no-dashboard]
 
 For several plans against the same target and gate, invoke the separate batch engine (one
 repeated `--task` per unit):
 
-    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds 1|2|3] [--round N ...] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...]
+    node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--concurrency N] [--token-budget TOKENS] [--rounds 1|2|3] [--round N ...] [--unit-kind candidate|node|merge] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--port PORT] [--open] [--no-dashboard]
 
 For a new project, generate both starter inputs without guessing their shapes:
 
@@ -57,6 +57,12 @@ Before invoking the loop, check the plan:
 
 ## Supervising a run
 
+Immediately after starting `run` or `batch`, tell the human the dashboard URL printed by the
+command and explicitly call it a read-only view. Do not leave the URL only in captured stderr.
+The command normally starts or reuses a detached scratch-root dashboard before executor work;
+`--open` also opens it locally. Use `--no-dashboard` (or `CCC_NO_DASHBOARD=1`, especially in CI)
+only when the operator does not want dashboard probing, startup, or an announcement.
+
 On a roughly 30-minute cadence, the controller reads `loop status <run-directory>`:
 
 - Events arriving and files changing: slow. Leave it.
@@ -70,8 +76,8 @@ never contacts a human.
 For a human-readable view, `loop dashboard <run-directory>` serves one pass, while
 `loop dashboard --scratch-root <directory>` provides triage sessions, in-flight stages, and
 one-pass detail across the scratch root. Sessions are a browser-only time-gap heuristic, not
-recorded facts. The dashboard is an optional localhost-only, read-only observer; a run never
-depends on it.
+recorded facts. The dashboard is a localhost-only, read-only observer; a run never depends on
+it and dashboard failure never changes the run outcome.
 
 ## Iterating
 

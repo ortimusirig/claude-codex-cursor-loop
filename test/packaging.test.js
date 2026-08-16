@@ -12,6 +12,7 @@ const readmePath = fileURLToPath(new URL('../README.md', import.meta.url));
 const installerPath = fileURLToPath(new URL('../install.mjs', import.meta.url));
 const cliPath = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 const runPath = fileURLToPath(new URL('../src/run.js', import.meta.url));
+const dashboardLauncherPath = fileURLToPath(new URL('../src/dashboard-launcher.js', import.meta.url));
 const logdyConfigPath = fileURLToPath(new URL('../docs/optional-tools/logdy-run-events.json', import.meta.url));
 const verifierPluginManifestPath = fileURLToPath(new URL('../cursor-plugin/.cursor-plugin/plugin.json', import.meta.url));
 const verifierSkillPath = fileURLToPath(new URL('../cursor-plugin/skills/ccc-verify/SKILL.md', import.meta.url));
@@ -69,6 +70,19 @@ test('GitHub publishing is lazy and absent from the run implementation', () => {
     'only the explicit publish branch may load the publisher');
   assert.doesNotMatch(run, /github-publisher|publishRunToGitHub|gh auth/,
     'the run implementation must not import, invoke, or configure publishing');
+});
+
+test('run imports only the dashboard launcher, never the server or view', () => {
+  const cli = readFileSync(cliPath, 'utf8');
+  const launcher = readFileSync(dashboardLauncherPath, 'utf8');
+  assert.match(cli, /^import \{[\s\S]*?launchDashboard[\s\S]*?from '\.\.\/src\/dashboard-launcher[.]js';/m);
+  assert.doesNotMatch(cli, /^import .*src\/dashboard(?:-view)?[.]js/m,
+    'the run module graph must not statically load dashboard polling or rendering');
+  assert.doesNotMatch(launcher, /from ['"].*dashboard(?:-view)?[.]js['"]|import\(['"].*dashboard(?:-view)?[.]js['"]\)/,
+    'the importable launcher must remain separate from server and view code');
+  assert.match(cli,
+    /opts[.]command === 'dashboard'[\s\S]*await import\('\.\.\/src\/dashboard[.]js'\)/,
+    'the explicit dashboard command must keep lazily loading the server');
 });
 
 test('the shipped ccc-verify skill carries the strict verdict and assertion-audit contracts', () => {

@@ -59,6 +59,30 @@ test('parses status with exactly one run directory', () => {
   assert.throws(() => parseArgs(['status', 'one', 'two']), /status <run-directory>/);
 });
 
+test('run and batch parse dashboard controls with the dashboard port rules', () => {
+  const run = parseArgs([
+    'run', '--task', 'p', '--target', 't', '--gate', 'g',
+    '--port', '8123', '--open', '--no-dashboard',
+  ]);
+  assert.equal(run.port, 8123);
+  assert.equal(run.open, true);
+  assert.equal(run.noDashboard, true);
+
+  const batch = parseArgs([
+    'batch', '--task', 'p', '--target', 't', '--gate', 'g', '--port', '0', '--open',
+  ]);
+  assert.equal(batch.port, 0);
+  assert.equal(batch.open, true);
+  assert.equal(Object.hasOwn(batch, 'noDashboard'), false);
+
+  assert.throws(() => parseArgs([
+    'run', '--task', 'p', '--target', 't', '--gate', 'g', '--port', '65536',
+  ]), /dashboard port/i);
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'p', '--target', 't', '--gate', 'g', '--port', '12.5',
+  ]), /dashboard port/i);
+});
+
 test('parses publish with exactly one completed run directory', () => {
   assert.deepEqual(parseArgs(['publish', 'C:/ccc/w/run/w']), {
     command: 'publish', runDirectory: 'C:/ccc/w/run/w',

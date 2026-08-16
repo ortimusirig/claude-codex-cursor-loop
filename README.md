@@ -97,8 +97,8 @@ to run side-by-side with an existing copy).
 ## Usage
 
 ```
-node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--quiet]
-node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--quiet]
+node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--port PORT] [--open] [--no-dashboard] [--quiet]
+node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--port PORT] [--open] [--no-dashboard] [--quiet]
 node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 node bin/loop.js publish <completed-run-directory>
@@ -290,10 +290,17 @@ that port is occupied it exits with an error; it never silently chooses another.
 CSS, JavaScript, HTTP server, and server-sent event stream use only Node built-ins and make
 no external requests.
 
+`run` and `batch` normally start (or reuse) a detached scratch-root dashboard before executor
+work and announce its URL on stderr. Pass `--open` to also open the default browser. Pass
+`--no-dashboard`, or set `CCC_NO_DASHBOARD=1` for CI, to skip probing, startup, and the
+announcement; `--quiet` hides the announcement but still starts the dashboard. `--port` uses
+the same fixed-port semantics as the explicit command.
+
 The dashboard is a separate, strictly read-only observer. Session assignments exist only in
 the browser. It tolerates a missing future run and an event record caught mid-append, and
 detects new runs and appended records while open. It never writes an artifact or signals a
-process, and `loop run` neither imports nor starts it.
+process. The run process imports only the small launcher and starts the server as a detached
+child; it never imports the dashboard server or view code.
 
 When verification runs, Cursor gets separate correctness and intent/assertion-audit turns.
 The correctness review stays in `verifierFindings`; the intent review is retained separately

@@ -40,6 +40,15 @@ function validateExecutorEffort(executorEffort) {
   }
 }
 
+function parseDashboardPort(value) {
+  if (value === undefined) return undefined;
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`invalid dashboard port: ${value}; expected an integer from 0 to 65535`);
+  }
+  return port;
+}
+
 export function parseArgs(argv) {
   const command = argv[0];
   if (argv.length === 1 && (command === 'help' || command === '--help' || command === '-h')) {
@@ -108,13 +117,7 @@ export function parseArgs(argv) {
     const parsed = { command };
     if (runDirectory) parsed.runDirectory = runDirectory;
     if (values['scratch-root']) parsed.scratchRoot = values['scratch-root'];
-    if (values.port !== undefined) {
-      const port = Number(values.port);
-      if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
-        throw new Error(`invalid dashboard port: ${values.port}; expected an integer from 0 to 65535`);
-      }
-      parsed.port = port;
-    }
+    if (values.port !== undefined) parsed.port = parseDashboardPort(values.port);
     return parsed;
   }
   if (command !== 'run' && command !== 'batch') {
@@ -141,6 +144,9 @@ export function parseArgs(argv) {
         'depends-on': { type: 'string', multiple: true },
       } : {}),
       quiet: { type: 'boolean' },
+      'no-dashboard': { type: 'boolean' },
+      open: { type: 'boolean' },
+      port: { type: 'string' },
     },
     strict: true,
   });
@@ -161,6 +167,9 @@ export function parseArgs(argv) {
       verifierModel: values['verifier-model'],
     };
     if (values.quiet) parsed.quiet = true;
+    if (values['no-dashboard']) parsed.noDashboard = true;
+    if (values.open) parsed.open = true;
+    if (values.port !== undefined) parsed.port = parseDashboardPort(values.port);
     return parsed;
   }
 
@@ -299,5 +308,8 @@ export function parseArgs(argv) {
     ));
   }
   if (values.quiet) parsed.quiet = true;
+  if (values['no-dashboard']) parsed.noDashboard = true;
+  if (values.open) parsed.open = true;
+  if (values.port !== undefined) parsed.port = parseDashboardPort(values.port);
   return parsed;
 }

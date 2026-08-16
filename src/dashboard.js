@@ -1,5 +1,9 @@
 import { createServer } from 'node:http';
 import {
+  DEFAULT_DASHBOARD_PORT,
+  DASHBOARD_HOST,
+} from './dashboard-config.js';
+import {
   buildDashboardSnapshot,
   renderDashboardContent,
   renderDashboardPage,
@@ -14,8 +18,7 @@ export {
   renderRunDetail,
 } from './dashboard-view.js';
 
-export const DEFAULT_DASHBOARD_PORT = 7331;
-export const DASHBOARD_HOST = '127.0.0.1';
+export { DEFAULT_DASHBOARD_PORT, DASHBOARD_HOST } from './dashboard-config.js';
 
 function fingerprint(snapshot) {
   return JSON.stringify({

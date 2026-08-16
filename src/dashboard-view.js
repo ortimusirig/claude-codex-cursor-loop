@@ -8,6 +8,7 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { CCC_DASHBOARD_MARKER } from './dashboard-config.js';
 import {
   CAMPAIGN_EVENTS_FILENAME,
   readCampaignEventStream,
@@ -882,7 +883,7 @@ export function renderDashboardPage(snapshot) {
 </style>
 </head>
 <body>
-<header><div><h1>CCC live run dashboard</h1><p>${escapeHtml(snapshot.sourcePath)}</p></div><span id="connection" class="connection">Connecting…</span></header>
+<header><div><h1>${CCC_DASHBOARD_MARKER}</h1><p>${escapeHtml(snapshot.sourcePath)}</p></div><span id="connection" class="connection">Connecting…</span></header>
 <main id="runs">${renderDashboardContent(snapshot)}</main>
 <script id="initial-dashboard-data" type="application/json">${jsonForInlineScript(snapshotForClient(snapshot))}</script>
 <script>${clientScript()}</script>

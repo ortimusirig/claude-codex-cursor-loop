@@ -12,6 +12,10 @@ import { exitCodeFor } from '../src/exit.js';
 import { formatEventSummary } from '../src/events.js';
 import { formatStatus, readStatus } from '../src/status.js';
 import { CLI_USAGE } from '../src/cli-help.js';
+import {
+  formatDashboardAnnouncement,
+  launchDashboard,
+} from '../src/dashboard-launcher.js';
 
 // Short path, outside OneDrive and outside AppData (both are rejected by
 // assertSafeScratchRoot; AppData is MSIX-redirected under a packaged host).
@@ -132,6 +136,30 @@ async function main() {
   if (!pf.ok) {
     process.stderr.write(`preflight failed: ${pf.reason}\n`);
     process.exit(2);
+  }
+  // The launcher only starts the separate dashboard command. The run path never
+  // imports the dashboard server or its view/polling implementation.
+  let dashboardResult;
+  try {
+    dashboardResult = await launchDashboard(SCRATCH_ROOT, {
+      disabled: opts.noDashboard,
+      open: opts.open,
+      port: opts.port,
+    });
+  } catch (error) {
+    // Defense in depth: observability can never decide the run's outcome.
+    dashboardResult = {
+      status: 'unavailable',
+      reason: `dashboard launcher failed: ${error?.message ?? String(error)}`,
+    };
+  }
+  if (!opts.quiet) {
+    const announcement = formatDashboardAnnouncement(dashboardResult, SCRATCH_ROOT, {
+      port: opts.port,
+    });
+    if (announcement) {
+      try { process.stderr.write(announcement); } catch { /* drop sink */ }
+    }
   }
   if (opts.command === 'batch') {
     const campaignId = `campaign-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
