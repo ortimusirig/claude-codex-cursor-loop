@@ -1,82 +1,35 @@
-# Using this skill on another system
+# Moving ccc-loop between machines
 
-The package itself is trivially portable: ~123 KB, 28 files, **zero runtime dependencies**
-(only Node builtins), no compilation, no `npm install`, no PowerShell or bash. Everything
-below is about the *environment* it drives, not the package.
+Installation and first-run commands live in [README.md](README.md). The details below are
+the machine-specific state that does not move with a copied checkout or installed skill.
 
-## 1. Prerequisites on the new machine
+## Authentication is per machine
 
-| Requirement | Why | How to check | How to install |
-|---|---|---|---|
-| **Node ≥ 24** | the skill's runtime | `node bin/loop.js doctor` | nodejs.org (LTS ≥24) |
-| **git** | isolation (worktree / init) | `node bin/loop.js doctor` | git-scm.com |
-| **Codex CLI** | the executor seat | `node bin/loop.js doctor --deep` | `npm i -g @openai/codex`, then sign in |
-| **Cursor Agent CLI** | the verifier seat | `node bin/loop.js doctor --deep` | install Cursor, then `agent login` |
-| **Claude Code** | the controller seat | — | claude.ai/code |
+ccc-loop stores and transfers no credentials. On every new machine, sign the Codex CLI in
+with its own ChatGPT/OpenAI account and run `agent login` for the Cursor Agent CLI with its
+own Cursor account. Both use interactive browser flows, so run them in a real terminal; an
+installer or copied configuration cannot complete them. Cost follows those subscriptions.
 
-**The binary is `agent`, not `cursor-agent`** (on Windows it lands at
-`%LOCALAPPDATA%\cursor-agent\agent.cmd`).
+Run `node bin/loop.js doctor` to check the local programs and get a specific fix for anything
+missing. Run `node bin/loop.js doctor --deep` when you want to spend agent tokens proving
+that Codex can write and Cursor can read on that machine.
 
-### Authentication is per-machine and per-vendor
-The skill stores **no credentials** and passes none. Each CLI authenticates itself with its
-own subscription on that machine:
-- **Codex** — sign in with your ChatGPT/OpenAI account (`codex` prompts on first run).
-- **Cursor** — `agent login` (browser flow; run it in a real terminal, not inside an agent).
-- **Claude Code** — its own sign-in.
+## Platform notes
 
-Cost follows those subscriptions. Nothing is billed through the skill.
+- **Windows** is the primary, fully exercised target. `.cmd` shims such as `codex.cmd` and
+  `agent.cmd` are launched through `cmd.exe` with verbatim quoting, including paths with
+  spaces.
+- **macOS and Linux** use only Node built-ins, POSIX `which`, and plain process spawning, but
+  have not had the same end-to-end coverage. Treat the first run on a Unix machine as a
+  platform verification.
+- The Cursor binary is `agent`, not `cursor-agent`. On Windows it normally lives below
+  `%LOCALAPPDATA%\cursor-agent\`.
 
-## 2. Transfer the package
+## Scratch root
 
-Copy the whole `run-claude-codex-cursor-loop-v2` folder to the new machine by any means —
-USB, OneDrive, `scp`, a git remote, or the zip bundle (`ccc-loop-portable.zip`).
+Run state is machine-local. The scratch root defaults to `C:/ccc/w` on Windows and
+`~/.ccc/w` elsewhere; set `CCC_SCRATCH_ROOT` to override it on the new machine.
 
-## 3. Install
-
-From inside the copied folder:
-
-```
-node install.mjs
-```
-
-It copies the payload to `~/.claude/skills/run-claude-codex-cursor-loop`, verifies **every
-file by SHA-256**, runs the self-test **from the installed location**, and reports whether
-`git` / `codex` / `agent` are present. A non-zero exit means it did not install cleanly.
-The PATH report proves presence only. After installation, run `node bin/loop.js doctor`; use
-`doctor --deep` to spend one small turn per agent and prove Codex writes and Cursor reads.
-
-Options: `--dry-run` (preview only), `--name <x>` (install under a different skill name,
-e.g. to run side-by-side with an existing install).
-
-## 4. Platform notes
-
-- **Windows** is the primary, fully-exercised target. `.cmd` shims (`codex.cmd`,
-  `agent.cmd`) are handled via `cmd.exe` with verbatim quoting — spaces in paths are safe.
-- **macOS / Linux** should work (pure Node, POSIX `which`, plain `spawn`), but the loop has
-  only been run end-to-end on Windows. Treat the first run on a Unix box as verification.
-- **Scratch root** defaults to `C:/ccc/w` on Windows and `~/.ccc/w` elsewhere. Override with
-  the `CCC_SCRATCH_ROOT` environment variable.
-- The scratch root must **not** sit under `AppData` or `OneDrive` — the installer's own
-  guard rejects those (AppData is MSIX-redirected under a packaged host; OneDrive syncs and
-  lengthens paths). This is enforced, not advisory.
-
-## 5. Verify it works on the new machine
-
-```
-node "<skills>/run-claude-codex-cursor-loop/bin/loop.js" run --task plan.md --target <folder> --gate gate.json
-```
-
-A minimal smoke test — a `plan.md` saying "create hello.txt containing HELLO WORLD", a
-`gate.json` of `[{"bin":"node","args":["-e","process.exit(require('fs').existsSync('hello.txt')?0:1)"]}]`,
-and any throwaway folder as `--target`. Expect `outcome: review-ready`, `gateStatus: passed`,
-and a `verdict`. Your target folder is never modified — the work lands in the isolated copy.
-
-## 6. Known first-run gotchas
-
-- **`where codex` may list an extensionless npm shim first** — handled (the resolver prefers
-  a PATHEXT-executable variant).
-- **Cursor needs `--trust`** to clear its workspace-trust gate, or it exits 1 with empty
-  output and every review silently falls back to `ISSUES`. Already on the launch line.
-- **Codex must trust the isolated directory to write.** Verified working with
-  `-s workspace-write` and the user config intact. Never pass `--ignore-user-config` — it
-  discards the project trust registry and Codex silently goes read-only.
+The scratch root must not be inside AppData or OneDrive. ccc-loop rejects those locations:
+AppData can be redirected by packaged hosts, while OneDrive can synchronize partial writes
+and create paths long enough to break tools. Choose a short, writable, local path instead.

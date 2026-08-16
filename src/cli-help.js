@@ -1,3 +1,7 @@
+export const CLI_COMMANDS = Object.freeze([
+  'run', 'batch', 'status', 'dashboard', 'publish', 'doctor', 'init', 'help',
+]);
+
 export const CLI_USAGE = `Usage:
   node bin/loop.js run --task <plan-file-or-prose> --target <directory> --gate <gate.json> [--gate-retries <0-3>] [--executor-model <model>] [--executor-effort <effort>] [--verifier-model <model>] [--quiet]
   node bin/loop.js batch --task <plan> [--task <plan> ...] --target <directory> --gate <gate.json> [--gate-retries <0-3>] [--executor-model <model>] [--executor-effort <effort>] [--verifier-model <model>] [--concurrency <1-16>] [--token-budget <tokens>] [--rounds <1-3>] [--round <number> ...] [--unit-kind <candidate|node|merge> ...] [--unit-id <id> ...] [--perspective <name> ...] [--depends-on <child=parent> ...] [--quiet]
@@ -17,4 +21,3 @@ Commands:
   doctor     Check prerequisites; --deep spends agent tokens on write/read probes.
   init       Create a starter plan.md and runnable gate.json without overwriting.
   help       Print this usage. --help and -h are aliases.`;
-

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnCapture } from '../src/spawn.js';
+import { CLI_COMMANDS } from '../src/cli-help.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 const fakeGit = fileURLToPath(new URL('../fixtures/fake-doctor-git.mjs', import.meta.url));
@@ -21,7 +22,6 @@ const fakeAgent = fileURLToPath(new URL('../fixtures/fake-doctor-agent.mjs', imp
 const fakeGh = fileURLToPath(new URL('../fixtures/fake-doctor-gh.mjs', import.meta.url));
 const fakeCodexNoWrite = fileURLToPath(new URL('../fixtures/fake-codex.mjs', import.meta.url));
 const fakeAgentBlocked = fileURLToPath(new URL('../fixtures/fake-agent-broken.mjs', import.meta.url));
-const COMMANDS = ['run', 'batch', 'status', 'dashboard', 'publish', 'doctor', 'init', 'help'];
 const SAFE_TEST_ROOT = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/tmp'
   : tmpdir());
@@ -89,7 +89,7 @@ async function invokeDoctor(fixture, ...extra) {
 
 function assertCompleteUsage(text) {
   assert.match(text, /^Usage:/m);
-  for (const command of COMMANDS) {
+  for (const command of CLI_COMMANDS) {
     assert.match(text, new RegExp(`node bin/loop[.]js ${command}(?:\\s|$)`),
       `usage must name the ${command} command`);
   }

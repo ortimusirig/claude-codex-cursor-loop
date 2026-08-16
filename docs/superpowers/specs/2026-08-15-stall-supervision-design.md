@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-15
 **Status:** approved, not yet implemented
-**Applies to:** `run-claude-codex-cursor-loop` v2
+**Applies to:** `ccc-loop` v2
 **Depends on:** the event stream from
 `2026-08-15-run-observability-and-obsidian-docs-design.md`
 

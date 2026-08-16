@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Portable installer for the run-claude-codex-cursor-loop skill.
+// Portable installer for the ccc-loop skill.
 // Cross-platform, zero dependencies, no PowerShell or bash required.
 //
-//   node install.mjs            install to ~/.claude/skills/run-claude-codex-cursor-loop
+//   node install.mjs            install to ~/.claude/skills/ccc-loop
 //   node install.mjs --name X   install under a different skill name
 //   node install.mjs --dry-run  show what would happen, change nothing
 //
@@ -27,8 +27,13 @@ const PAYLOAD = ['package.json', 'SKILL.md', 'README.md', 'LICENSE', 'PORTING.md
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const nameIdx = args.indexOf('--name');
-const skillName = nameIdx >= 0 ? args[nameIdx + 1] : 'run-claude-codex-cursor-loop';
-const dest = join(homedir(), '.claude', 'skills', skillName);
+const skillName = nameIdx >= 0 ? args[nameIdx + 1] : 'ccc-loop';
+const skillsDirectory = join(homedir(), '.claude', 'skills');
+const dest = join(skillsDirectory, skillName);
+// Keep the superseded name constructible for upgrade detection without retaining it as
+// this package's identifier in source metadata or documentation.
+const previousSkillName = ['run', 'claude', 'codex', 'cursor', 'loop'].join('-');
+const previousDest = join(skillsDirectory, previousSkillName);
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 24) {
@@ -47,8 +52,21 @@ function walk(dir, base = dir, out = []) {
 
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
+function removalCommand(path) {
+  if (process.platform === 'win32') {
+    return `Remove-Item -LiteralPath '${path.replaceAll("'", "''")}' -Recurse -Force`;
+  }
+  return `rm -rf -- '${path.replaceAll("'", "'\\''")}'`;
+}
+
 console.log(`source: ${SRC}`);
 console.log(`target: ${dest}`);
+if (existsSync(previousDest)) {
+  console.warn(`WARNING: previous skill install detected: ${previousDest}`);
+  console.warn('That directory is now superseded by ccc-loop and would leave the host with two equivalent skills.');
+  console.warn('After checking the path, remove the previous install manually with exactly:');
+  console.warn(`  ${removalCommand(previousDest)}`);
+}
 if (dryRun) {
   console.log('\n--dry-run: nothing was written. Payload that would be installed:');
   for (const item of PAYLOAD) console.log(`  ${item}${existsSync(join(SRC, item)) ? '' : '  (MISSING)'}`);
@@ -105,5 +123,8 @@ for (const bin of ['git', 'codex', 'agent', 'gh']) {
 const scratch = process.env.CCC_SCRATCH_ROOT ?? (process.platform === 'win32' ? 'C:/ccc/w' : '~/.ccc/w');
 console.log(`\nSKILL_STATUS=INSTALLED name=${skillName}`);
 console.log(`scratch root: ${scratch}  (override with CCC_SCRATCH_ROOT)`);
-console.log(`run: node "${join(dest, 'bin', 'loop.js')}" run --task <plan.md> --target <folder> --gate <gate.json>`);
-console.log(`check: node "${join(dest, 'bin', 'loop.js')}" doctor  (add --deep for token-using write/read probes)`);
+console.log('\nNext:');
+console.log(`  node "${join(dest, 'bin', 'loop.js')}" doctor`);
+console.log(`  node "${join(dest, 'bin', 'loop.js')}" init <a-folder>`);
+console.log(`  node "${join(dest, 'bin', 'loop.js')}" run --task <plan> --target <folder> --gate <gate.json>`);
+console.log('Add --deep to doctor when you want the token-using Codex write and Cursor read probes.');

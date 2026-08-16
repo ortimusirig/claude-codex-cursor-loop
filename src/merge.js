@@ -128,7 +128,10 @@ export async function advanceMerge({ cwd, parents, nextParentIndex = 1, unitId }
   for (let index = nextParentIndex; index < parents.length; index++) {
     const parent = parents[index];
     const result = await spawnCapture('git', [
-      '-C', cwd, 'merge', '--no-commit', '--no-ff', '--no-edit', parent.commit,
+      '-C', cwd,
+      '-c', 'user.email=ccc@local',
+      '-c', 'user.name=ccc',
+      'merge', '--no-commit', '--no-ff', '--no-edit', parent.commit,
     ]);
     if (result.code !== 0) {
       const paths = await unmergedPaths(cwd);

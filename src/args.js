@@ -1,4 +1,5 @@
 import { parseArgs as nodeParseArgs } from 'node:util';
+import { CLI_COMMANDS } from './cli-help.js';
 import {
   DEFAULT_CONCURRENCY,
   DEFAULT_ROUNDS,
@@ -43,6 +44,9 @@ export function parseArgs(argv) {
   const command = argv[0];
   if (argv.length === 1 && (command === 'help' || command === '--help' || command === '-h')) {
     return { command: 'help' };
+  }
+  if (!CLI_COMMANDS.includes(command)) {
+    throw new Error(`unknown command: ${command ?? '(none)'}`);
   }
   if (command === 'doctor') {
     const { values } = nodeParseArgs({

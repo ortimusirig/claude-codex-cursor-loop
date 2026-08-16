@@ -1,8 +1,36 @@
-# run-claude-codex-cursor-loop
+# ccc-loop
 
-A three-seat agent loop for [Claude Code](https://claude.ai/code): **Claude plans, Codex
-writes, Cursor reviews** — with the write step confined to a git-isolated copy and a gate
-that decides pass/fail by exit code, not by an LLM's opinion.
+Codex writes in a git-isolated copy, command exit codes gate the change, and Cursor reviews it read-only.
+
+```sh
+git clone https://github.com/ortimusirig/claude-codex-cursor-loop.git
+cd claude-codex-cursor-loop
+node install.mjs
+node bin/loop.js doctor
+node bin/loop.js init ../ccc-loop-demo
+node bin/loop.js run --task ../ccc-loop-demo/plan.md --target ../ccc-loop-demo --gate ../ccc-loop-demo/gate.json
+```
+
+## What you need
+
+**Node 24+, git, the Codex CLI, and the Cursor Agent CLI are required. Codex and Cursor
+must each be signed in with its own account.** The Cursor binary is `agent`, not
+`cursor-agent`.
+
+No installer can perform those sign-ins: they are interactive browser flows owned by each
+CLI. `doctor` reports which required programs are missing and gives the exact fix for each;
+`doctor --deep` spends a small number of agent tokens to verify that the signed-in Codex CLI
+can write and the signed-in Cursor CLI can read.
+
+**Everything else is optional.** GitHub publishing, Logdy, and the offline Obsidian journal
+are separate add-ons. A machine with none of them has a fully working loop.
+
+`init` creates two starter inputs without overwriting existing files. `plan.md` tells Codex
+what result to produce and what must not change. `gate.json` is a JSON list of commands whose
+exit codes decide whether the result passes. Replace the generated prompts and placeholder
+gate with the real task and project checks before relying on the result.
+
+## How the loop works
 
 One `loop run` is one pass:
 
@@ -26,18 +54,6 @@ Three separate failure modes get three separate seats:
 The loop refuses to report success over a red gate. If the verifier fails to launch, that is
 reported as `verifier-failed` — never silently downgraded to a review verdict.
 
-## Requirements
-
-| Requirement | Why | Check |
-|---|---|---|
-| **Node ≥ 24** | runtime | `node bin/loop.js doctor` |
-| **git** | isolation (worktree / init) | `node bin/loop.js doctor` |
-| **Codex CLI** | executor seat | `node bin/loop.js doctor --deep` |
-| **Cursor Agent CLI** | verifier seat | `node bin/loop.js doctor --deep` |
-| **Claude Code** | controller seat | — |
-
-The Cursor binary is **`agent`**, not `cursor-agent`.
-
 **No credentials are stored or passed by this package.** Each CLI authenticates itself on
 your machine with your own subscription, and cost follows those subscriptions. Nothing is
 billed through this skill.
@@ -51,11 +67,12 @@ POSIX `which`, plain `spawn` — but treat the first Unix run as verification.
 node install.mjs
 ```
 
-Copies the payload to `~/.claude/skills/run-claude-codex-cursor-loop`, verifies **every file
+Copies the payload to `~/.claude/skills/ccc-loop`, verifies **every file
 by SHA-256**, runs the test suite **from the installed location**, and reports whether `git`,
 `codex`, `agent`, and the optional `gh` publisher are on PATH. Those installer lines report
 presence only. Run `doctor --deep` to prove that Codex can write and Cursor can read. Non-zero
-installer exit means it did not install cleanly.
+installer exit means it did not install cleanly. If the superseded skill directory is still
+present, the installer names it and prints the exact removal command without deleting it.
 
 Options: `--dry-run` (preview, writes nothing), `--name <x>` (install under a different name
 to run side-by-side with an existing copy).
@@ -71,14 +88,6 @@ node bin/loop.js publish <completed-run-directory>
 node bin/loop.js doctor [--deep] [--scratch-root <directory>] [--repository <directory>]
 node bin/loop.js init <directory>
 node bin/loop.js --help
-```
-
-For a first run, scaffold both inputs and check the machine:
-
-```sh
-node bin/loop.js init /path/to/project
-node bin/loop.js doctor
-node bin/loop.js doctor --deep
 ```
 
 `init` never overwrites `plan.md` or `gate.json`. It detects a `package.json` test script;

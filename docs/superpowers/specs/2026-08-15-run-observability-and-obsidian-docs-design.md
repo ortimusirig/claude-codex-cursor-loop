@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-15
 **Status:** approved, not yet implemented
-**Applies to:** `run-claude-codex-cursor-loop` v2
+**Applies to:** `ccc-loop` v2
 
 ## Problem
 
