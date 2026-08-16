@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    # Windows is the primary, fully-exercised target, so this job gates the badge.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # Zero runtime dependencies and no build step, so there is nothing to install.
+      - run: node --test
+
+  unix:
+    # The README says macOS and Linux "should work" but were never verified. This job
+    # turns that claim into evidence without gating the badge on an unsupported platform.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test
