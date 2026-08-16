@@ -16,9 +16,21 @@ import { commandExists, spawnCapture } from './spawn.js';
 import { buildCursorArgs } from './verifier.js';
 
 const MINIMUM_NODE_MAJOR = 24;
+const CHEAP_PROBE_TIMEOUT_MS = 30_000;
 const PROBE_TIMEOUT_MS = 180_000;
 const WRITE_FILENAME = 'ccc-doctor-write.txt';
 const WRITE_CONTENT = 'CCC_DOCTOR_WRITE_OK\n';
+
+export const CURSOR_AGENT_INSTALL_COMMANDS = Object.freeze({
+  win32: "irm 'https://cursor.com/install?win32=true' | iex",
+  other: 'curl https://cursor.com/install -fsS | bash',
+});
+
+export function cursorAgentInstallCommand(platform = process.platform) {
+  return platform === 'win32'
+    ? CURSOR_AGENT_INSTALL_COMMANDS.win32
+    : CURSOR_AGENT_INSTALL_COMMANDS.other;
+}
 
 function statusLine(status, kind, name, detail, next) {
   return [
@@ -30,11 +42,26 @@ function statusLine(status, kind, name, detail, next) {
 async function installedAndUsable(bin, args) {
   if (!(await commandExists(bin))) return { installed: false, usable: false, result: null };
   try {
-    const result = await spawnCapture(bin, args, { timeoutMs: 30_000 });
+    const result = await spawnCapture(bin, args, { timeoutMs: CHEAP_PROBE_TIMEOUT_MS });
     return { installed: true, usable: result.code === 0 && !result.timedOut, result };
   } catch (error) {
     return { installed: true, usable: false, result: null, error };
   }
+}
+
+async function signInStatus(bin, args) {
+  try {
+    const result = await spawnCapture(bin, args, { timeoutMs: CHEAP_PROBE_TIMEOUT_MS });
+    return { signedIn: result.code === 0 && !result.timedOut, result };
+  } catch (error) {
+    return { signedIn: false, result: null, error };
+  }
+}
+
+function signInFailureDetail(command, status) {
+  if (status.error) return `\`${command}\` could not run: ${status.error.message}`;
+  if (status.result.timedOut) return `\`${command}\` timed out`;
+  return `\`${command}\` exited ${status.result.code}`;
 }
 
 function missingDirectories(path) {
@@ -172,13 +199,39 @@ export async function runDoctor({
       'run `npm install -g @openai/codex`, then run `codex` in a terminal to sign in.'));
   }
 
+  if (!codexPresent) {
+    lines.push(...statusLine('SKIP', 'required', 'Codex signed in', 'not checked because the Codex CLI is not installed yet'));
+  } else {
+    const codexSignIn = await signInStatus(bins.codex, ['login', 'status']);
+    if (codexSignIn.signedIn) {
+      lines.push(...statusLine('PASS', 'required', 'Codex signed in', '`codex login status` exited 0'));
+    } else {
+      requiredFailed = true;
+      lines.push(...statusLine('FAIL', 'required', 'Codex signed in', signInFailureDetail('codex login status', codexSignIn),
+        'run `codex login`; if that does not help, update or reinstall the Codex CLI, then rerun doctor.'));
+    }
+  }
+
   const agentPresent = await commandExists(bins.agent);
   if (agentPresent) {
     lines.push(...statusLine('PASS', 'required', 'Cursor agent installed', `${bins.agent} was found; read ability is reported separately`));
   } else {
     requiredFailed = true;
     lines.push(...statusLine('FAIL', 'required', 'Cursor agent installed', `${bins.agent} was not found on PATH`,
-      'install the Cursor Agent CLI, reopen the terminal, and run `agent login`.'));
+      `run \`${cursorAgentInstallCommand()}\`${process.platform === 'win32' ? ' in Windows PowerShell' : ''}, reopen the terminal, confirm the binary is \`agent\`, and run \`agent login\`.`));
+  }
+
+  if (!agentPresent) {
+    lines.push(...statusLine('SKIP', 'required', 'Cursor signed in', 'not checked because the Cursor Agent CLI is not installed yet'));
+  } else {
+    const agentSignIn = await signInStatus(bins.agent, ['status']);
+    if (agentSignIn.signedIn) {
+      lines.push(...statusLine('PASS', 'required', 'Cursor signed in', '`agent status` exited 0'));
+    } else {
+      requiredFailed = true;
+      lines.push(...statusLine('FAIL', 'required', 'Cursor signed in', signInFailureDetail('agent status', agentSignIn),
+        'run `agent login`; if that does not help, run `agent update` or reinstall the Cursor Agent CLI, then rerun doctor.'));
+    }
   }
 
   try {
@@ -316,8 +369,8 @@ export async function runDoctor({
   } else if (deep) {
     lines.push('Loop health: HEALTHY (all required checks, including the write/read probes, passed).');
   } else {
-    lines.push('Loop core health: HEALTHY (all performed required checks passed).');
-    lines.push('Deep readiness: UNKNOWN (Codex write and Cursor read probes were SKIPPED, not passed).');
+    lines.push('Loop core health: HEALTHY (all performed required checks passed; Codex and Cursor sign-ins were verified).');
+    lines.push('Deep readiness: UNKNOWN (sign-in was verified, but Codex write and Cursor read remain unproven until `--deep`; those probes were SKIPPED, not passed).');
   }
   lines.push('GitHub publishing and Logdy are optional; the loop is fully usable without them.');
   return { ok: !requiredFailed, output: `${lines.join('\n')}\n` };

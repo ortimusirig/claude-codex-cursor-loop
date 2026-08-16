@@ -19,8 +19,23 @@ node bin/loop.js run --task ../ccc-loop-demo/plan.md --target ../ccc-loop-demo -
 must each be signed in with its own account.** The Cursor binary is `agent`, not
 `cursor-agent`.
 
+Install the Cursor Agent CLI on Windows from PowerShell:
+
+```powershell
+irm 'https://cursor.com/install?win32=true' | iex
+```
+
+On macOS, Linux, or WSL:
+
+```sh
+curl https://cursor.com/install -fsS | bash
+```
+
+Reopen the terminal after installing, confirm the binary is `agent`, and run `agent login`.
+
 No installer can perform those sign-ins: they are interactive browser flows owned by each
-CLI. `doctor` reports which required programs are missing and gives the exact fix for each;
+CLI. Plain `doctor` reports which required programs are missing, gives the exact fix for each,
+and verifies both sign-ins with free local status commands; it spends no agent tokens.
 `doctor --deep` spends a small number of agent tokens to verify that the signed-in Codex CLI
 can write and the signed-in Cursor CLI can read.
 
@@ -94,10 +109,11 @@ node bin/loop.js --help
 
 `init` never overwrites `plan.md` or `gate.json`. It detects a `package.json` test script;
 otherwise it emits a valid, runnable placeholder gate with an explicit comment telling you to
-replace it. `doctor` runs Node, Git, PATH, scratch-safety, and scratch-writability checks by
-default. The Codex write and Cursor read probes spend real agent tokens, so they are marked
-`SKIP` until `--deep` is supplied. Every probe uses and cleans its own disposable scratch
-directory; neither the target nor a run directory is modified.
+replace it. `doctor` runs Node, Git, PATH, local Codex/Cursor sign-in, scratch-safety, and
+scratch-writability checks by default without spending agent tokens. The Codex write and Cursor
+read probes spend real agent tokens, so they are marked `SKIP` until `--deep` is supplied.
+Every probe uses and cleans its own disposable scratch directory; neither the target nor a run
+directory is modified.
 
 | Option | Required | Default | Range |
 |---|---|---|---|
