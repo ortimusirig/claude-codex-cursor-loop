@@ -154,8 +154,10 @@ test('installer warns about a superseded install without deleting it and is sile
 
 test('README starts with a copyable quickstart whose loop commands are real commands', () => {
   const readme = readFileSync(readmePath, 'utf8');
-  const match = /^# ccc-loop\r?\n\r?\n([^\r\n]+)\r?\n\r?\n```sh\r?\n([\s\S]*?)\r?\n```/.exec(readme);
-  assert.ok(match, 'the first heading and one-line description must be followed immediately by the quickstart');
+  // One badge line may sit between the heading and the description — universal convention,
+  // and it buries nothing. Everything else stays strict.
+  const match = /^# ccc-loop\r?\n\r?\n(?:\[!\[[^\r\n]*\r?\n\r?\n)?([^\r\n]+)\r?\n\r?\n```sh\r?\n([\s\S]*?)\r?\n```/.exec(readme);
+  assert.ok(match, 'the heading, an optional single badge line, and a one-line description must be followed immediately by the quickstart');
   const lines = match[2].split(/\r?\n/);
   assert.deepEqual(lines, [
     'git clone https://github.com/ortimusirig/claude-codex-cursor-loop.git',
