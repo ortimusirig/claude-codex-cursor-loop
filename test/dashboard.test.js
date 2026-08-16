@@ -17,6 +17,16 @@ import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDashboard } from '../src/dashboard.js';
+import {
+  buildDashboardSnapshot,
+  DEFAULT_SESSION_THRESHOLD_HOURS,
+  inferSessions,
+  MAX_RENDERED_DIFF_BYTES,
+  renderDashboardPage,
+  renderRunDetail,
+  renderSessionList,
+  runNeedsAttention,
+} from '../src/dashboard-view.js';
 import { spawnCapture } from '../src/spawn.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
@@ -344,6 +354,7 @@ test('dashboard serving and SSE observation leave every run byte unchanged', asy
     event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
   ], '{"unfinished":');
   writeFileSync(join(run.work, 'operator-note.txt'), 'must remain byte-for-byte identical\n');
+  writeFileSync(join(run.work, 'CHANGES.diff'), '--- a/src/a.js\n+++ b/src/a.js\n-old\n+new\n');
   writeFileSync(join(run.work, 'ccc-runfacts.json'), JSON.stringify({
     runId,
     verdict: 'NO_BLOCKERS',
@@ -393,6 +404,211 @@ test('the dashboard command reports an occupied fixed port instead of rebinding'
     assert.match(result.stderr, new RegExp(`dashboard failed: port ${occupying.port} is already in use on localhost`));
   } finally {
     await occupying?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function triageRun(runId, startTs, overrides = {}) {
+  return {
+    runId,
+    startTs,
+    endTs: startTs,
+    gateResult: 'passed',
+    verifiers: {
+      correctness: { verdict: 'NO_BLOCKERS', verdictSource: 'result' },
+      intent: { verdict: 'NO_BLOCKERS', verdictSource: 'assistant' },
+    },
+    ...overrides,
+  };
+}
+
+test('session inference groups the just-under gap and splits the just-over gap', () => {
+  const newest = triageRun('newest', '2026-08-15T04:00:00.000Z');
+  const justUnder = triageRun('just-under', '2026-08-15T02:00:01.000Z');
+  const justOver = triageRun('just-over', '2026-08-14T23:59:59.000Z');
+  const sessions = inferSessions([justUnder, justOver, newest], DEFAULT_SESSION_THRESHOLD_HOURS);
+  assert.deepEqual(sessions.map((session) => session.runs.map((run) => run.runId)), [
+    ['newest', 'just-under'],
+    ['just-over'],
+  ], '1:59:59 must stay in one session while the consecutive 2:00:02 gap starts another');
+});
+
+test('changing the heuristic threshold regroups the same passes', () => {
+  const runs = [
+    triageRun('three', '2026-08-15T04:00:00.000Z'),
+    triageRun('two', '2026-08-15T02:00:01.000Z'),
+    triageRun('one', '2026-08-14T23:59:59.000Z'),
+  ];
+  assert.deepEqual(inferSessions(runs, 2).map((session) => session.passCount), [2, 1]);
+  assert.deepEqual(inferSessions(runs, 2.01).map((session) => session.passCount), [3],
+    'raising the on-page threshold above both boundary gaps must combine the same passes');
+});
+
+test('needs-attention includes every qualifying seat and excludes a clean pass', () => {
+  const clean = triageRun('clean', '2026-08-15T00:00:00.000Z');
+  const cases = [
+    ['failed gate', { gateResult: 'failed' }],
+    ['correctness issues', {
+      verifiers: { ...clean.verifiers, correctness: { verdict: 'ISSUES', verdictSource: 'assistant' } },
+    }],
+    ['intent issues', {
+      verifiers: { ...clean.verifiers, intent: { verdict: 'ISSUES', verdictSource: 'assistant' } },
+    }],
+    ['correctness no verdict', {
+      verifiers: { ...clean.verifiers, correctness: { verdict: 'ISSUES', verdictSource: 'none' } },
+    }],
+    ['intent no verdict', {
+      verifiers: { ...clean.verifiers, intent: { verdict: 'ISSUES', verdictSource: 'none' } },
+    }],
+  ];
+  for (const [name, fields] of cases) {
+    assert.equal(runNeedsAttention({ ...clean, ...fields }), true, `${name} must need attention`);
+  }
+  assert.equal(runNeedsAttention(clean), false, 'a passed gate and two clean verdicts must be excluded');
+});
+
+test('session rows count all and attention-needing passes independently', () => {
+  const runs = [
+    triageRun('failed', '2026-08-15T01:00:00.000Z', { gateResult: 'failed' }),
+    triageRun('clean', '2026-08-15T00:30:00.000Z'),
+    triageRun('unknown', '2026-08-15T00:00:00.000Z', {
+      verifiers: {
+        correctness: { verdict: 'ISSUES', verdictSource: 'none' },
+        intent: { verdict: 'NO_BLOCKERS', verdictSource: 'assistant' },
+      },
+    }),
+  ];
+  const [session] = inferSessions(runs, 2);
+  assert.equal(session.passCount, 3);
+  assert.equal(session.attentionCount, 2);
+  const displayRuns = runs.map((run) => ({
+    ...run,
+    needsAttention: runNeedsAttention(run),
+    filesChanged: [],
+    triage: {
+      gate: { kind: run.gateResult === 'failed' ? 'issues' : 'clean', text: run.gateResult },
+      correctness: { kind: 'clean', text: run.verifiers.correctness.verdict },
+      intent: { kind: 'clean', text: run.verifiers.intent.verdict },
+    },
+  }));
+  const html = renderSessionList(displayRuns, 2, false);
+  assert.match(html, />3 passes</);
+  assert.match(html, />2 need attention</,
+    'the rendered session summary must report the computed attention count');
+});
+
+test('triage is the default collapsed view with visible heuristic and attention controls', () => {
+  const run = triageRun('default-triage', '2026-08-15T00:00:00.000Z');
+  const snapshot = {
+    sourcePath: 'portable-fixture', message: null, runs: [{
+      ...run,
+      state: 'finished', message: null, endTs: run.startTs, currentStage: 'report',
+      currentType: 'finish', lastEventTs: run.startTs, timeline: [], files: [],
+      filesChanged: [], triage: {
+        gate: { kind: 'clean', text: 'Passed — fine' },
+        correctness: { kind: 'clean', text: 'NO_BLOCKERS — fine' },
+        intent: { kind: 'clean', text: 'NO_BLOCKERS — fine' },
+      }, needsAttention: false, directory: 'portable-fixture', worktreeDirectory: 'portable-fixture',
+      verifiers: run.verifiers, tokens: { executor: {}, correctness: {}, intent: {} },
+      gateCommands: [], stalls: [], executorRationale: null,
+      diff: { message: 'not available', text: '', byteCount: 0, renderedByteCount: 0, capped: false },
+    }], liveUnits: [], mode: 'scratch', observedAt: run.startTs,
+  };
+  const html = renderDashboardPage(snapshot);
+  assert.match(html, /data-view="triage" aria-pressed="true"/);
+  assert.match(html, /data-view-panel="triage">/);
+  assert.match(html, /data-view-panel="live" hidden/);
+  assert.match(html, /data-view-panel="detail" hidden/);
+  assert.match(html, /Inferred session gap threshold[\s\S]*value="2"[\s\S]*Heuristic only/);
+  assert.match(html, /id="attention-only" type="checkbox" checked/);
+  assert.match(html, /<details class="session"[^>]*>/);
+  assert.doesNotMatch(html, /<details class="session"[^>]*\sopen(?:\s|>)/,
+    'sessions must be collapsed by default');
+});
+
+test('unified diff renders additions and removals with distinct line meanings', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-diff-'));
+  const runId = 'run-real-diff';
+  const run = makeRun(root, runId, [
+    event(runId, 'report', 'finish', { ts: '2026-08-15T00:00:00.000Z' }),
+  ]);
+  writeFileSync(join(run.work, 'CHANGES.diff'), [
+    '--- a/src/value.js',
+    '+++ b/src/value.js',
+    '@@ -1 +1 @@',
+    '-const value = "before";',
+    '+const value = "after";',
+    '',
+  ].join('\n'));
+  try {
+    const snapshot = buildDashboardSnapshot({ runDirectory: run.directory });
+    const html = renderRunDetail(snapshot.runs[0]);
+    assert.match(html, /data-diff-line="removed">-const value = &quot;before&quot;;/);
+    assert.match(html, /data-diff-line="added">\+const value = &quot;after&quot;;/);
+    assert.match(html, /\.diff-add\{background:var\(--add\);color:var\(--ok\)\}|class="diff-line diff-add"/);
+    assert.match(html, /class="diff-line diff-remove"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('oversized unified diff is byte-capped and says so plainly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-diff-cap-'));
+  const runId = 'run-large-diff';
+  const run = makeRun(root, runId, [event(runId, 'report', 'finish')]);
+  const diff = '-removed line\n+added line\n'.repeat(Math.ceil(MAX_RENDERED_DIFF_BYTES / 8));
+  writeFileSync(join(run.work, 'CHANGES.diff'), diff);
+  try {
+    const snapshot = buildDashboardSnapshot({ runDirectory: run.directory });
+    const rendered = snapshot.runs[0].diff;
+    assert.equal(rendered.capped, true);
+    assert.equal(rendered.renderedByteCount, MAX_RENDERED_DIFF_BYTES);
+    assert.equal(rendered.byteCount, Buffer.byteLength(diff));
+    const html = renderRunDetail(snapshot.runs[0]);
+    assert.match(html, /Diff rendering capped[\s\S]*Showing 131,072 of [\d,]+ bytes/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('live view distinguishes predecessor waiting from an emitted stall', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-live-states-'));
+  const campaignDirectory = join(root, 'campaign-live');
+  mkdirSync(campaignDirectory);
+  writeFileSync(join(campaignDirectory, 'campaign-events.jsonl'), `${JSON.stringify({
+    ts: '2026-08-15T00:00:00.000Z', runId: 'waiting-child', campaignId: 'campaign-live',
+    round: 1, unitId: 'waiting-child', unitKind: 'node', stage: 'unit', type: 'waiting',
+    predecessorUnitId: 'parent-unit',
+  })}\n`);
+  makeRun(root, 'stalled-unit', [
+    event('stalled-unit', 'executor', 'start', { ts: '2026-08-15T00:00:00.000Z' }),
+    event('stalled-unit', 'executor', 'stalled', {
+      ts: '2026-08-15T00:01:01.000Z', gapMs: 61000,
+      lastEvent: { stage: 'executor', type: 'start' },
+    }),
+  ]);
+  try {
+    const html = renderDashboardPage(buildDashboardSnapshot({ scratchRoot: root }));
+    assert.match(html, /waiting-predecessor[\s\S]*Waiting on predecessor: parent-unit/);
+    assert.match(html, /class="live-unit stalled"[\s\S]*Stalled — watchdog reported no progress/);
+    assert.doesNotMatch(html, /waiting-predecessor[\s\S]{0,200}watchdog reported no progress/,
+      'declared dependency waiting must not be labelled as a stall');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('dashboard serves an empty scratch root without inventing a run', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-empty-root-'));
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
+    const html = await page(dashboard);
+    assert.match(html, /No run directories found yet/);
+    assert.match(html, /No passes to group into sessions/);
+    assert.doesNotMatch(html, /data-run-id="/);
+  } finally {
+    await dashboard?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

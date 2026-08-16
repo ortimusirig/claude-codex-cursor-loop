@@ -246,11 +246,16 @@ isolated `w` directory, its parent run directory, or a campaign directory contai
 `campaign-events.jsonl`. It tolerates a final line that is still being appended, distinguishes
 every campaign unit, and never writes to the run or signals its processes.
 
-`dashboard` serves the live event data plus completed run facts as a side-by-side browser
-view. Each completed card includes both labelled verifier texts, each verdict's source and
-evidence-consistency status, the executor rationale, and a copyable `code "<worktree>"`
-command for reviewing the diff in VS Code. A source of `none` is called out as a fail-safe
-default rather than a reviewer finding. Pass a run directory for one card,
+`dashboard` serves three in-page views over live event data and completed run facts. Triage is
+the default: it groups passes into collapsed, newest-first sessions using an explicitly
+heuristic two-hour start-time gap. The threshold can be changed in the page without persisting
+an assignment, and the needs-attention filter is on by default. Live shows each in-flight
+unit's current stage and last-event age, with predecessor waiting labelled separately from a
+watchdog stall. Detail renders one selected pass, including both labelled verifier texts,
+sources, evidence-consistency status, executor rationale, seat tokens, a copyable
+`code "<worktree>"` command, and a byte-capped line-coloured `CHANGES.diff`. A source of `none`
+is called out as an unknown fail-safe default rather than a reviewer finding. Pass a run
+directory for one pass,
 `--scratch-root <directory>` for every run under a campaign root, or neither to use
 `CCC_SCRATCH_ROOT` and its platform default. It listens only on
 `127.0.0.1`, prints its URL on stdout, and uses fixed port `7331` unless `--port` is set. If
@@ -258,10 +263,10 @@ that port is occupied it exits with an error; it never silently chooses another.
 CSS, JavaScript, HTTP server, and server-sent event stream use only Node built-ins and make
 no external requests.
 
-The dashboard is a separate, strictly read-only observer. It tolerates a missing future run
-and an event record caught mid-append, and detects new runs and appended records while open.
-It never writes an artifact or signals a process, and `loop run` neither imports nor starts
-it.
+The dashboard is a separate, strictly read-only observer. Session assignments exist only in
+the browser. It tolerates a missing future run and an event record caught mid-append, and
+detects new runs and appended records while open. It never writes an artifact or signals a
+process, and `loop run` neither imports nor starts it.
 
 When verification runs, Cursor gets separate correctness and intent/assertion-audit turns.
 The correctness review stays in `verifierFindings`; the intent review is retained separately

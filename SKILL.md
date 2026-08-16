@@ -67,9 +67,11 @@ On a roughly 30-minute cadence, the controller reads `loop status <run-directory
 The cadence is controller behaviour. Nothing in this package schedules it, and the package
 never contacts a human.
 
-For a human-readable live view, `loop dashboard <run-directory>` serves one run, while
-`loop dashboard --scratch-root <directory>` lays campaign runs out side by side. The
-dashboard is an optional localhost-only, read-only observer; a run never depends on it.
+For a human-readable view, `loop dashboard <run-directory>` serves one pass, while
+`loop dashboard --scratch-root <directory>` provides triage sessions, in-flight stages, and
+one-pass detail across the scratch root. Sessions are a browser-only time-gap heuristic, not
+recorded facts. The dashboard is an optional localhost-only, read-only observer; a run never
+depends on it.
 
 ## Iterating
 
