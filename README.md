@@ -1,12 +1,12 @@
-# claude-codex-cursor-loop
+# c-cube-loop
 
-[![tests](https://github.com/ortimusirig/claude-codex-cursor-loop/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/claude-codex-cursor-loop/actions/workflows/tests.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
+[![tests](https://github.com/ortimusirig/c-cube-loop/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/c-cube-loop/actions/workflows/tests.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
 
 Codex writes in a git-isolated copy, command exit codes gate the change, and Cursor reviews it read-only.
 
 ```sh
-git clone https://github.com/ortimusirig/claude-codex-cursor-loop.git
-cd claude-codex-cursor-loop
+git clone https://github.com/ortimusirig/c-cube-loop.git
+cd c-cube-loop
 node install.mjs
 node bin/loop.js doctor
 node bin/loop.js init ../ccc-loop-demo
@@ -84,7 +84,7 @@ POSIX `which`, plain `spawn` — but treat the first Unix run as verification.
 node install.mjs
 ```
 
-Copies the payload to `~/.claude/skills/claude-codex-cursor-loop`, verifies **every file
+Copies the payload to `~/.claude/skills/c-cube-loop`, verifies **every file
 by SHA-256**, runs the test suite **from the installed location**, and reports whether `git`,
 `codex`, `agent`, and the optional `gh` publisher are on PATH. Those installer lines report
 presence only. Run `doctor --deep` to prove that Codex can write and Cursor can read. Non-zero

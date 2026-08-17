@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-15
 **Status:** approved in design, not yet implemented
-**Applies to:** `claude-codex-cursor-loop` v3
+**Applies to:** `c-cube-loop` v3
 **Depends on:** the event stream (v2, shipped), the `ccc-verify` skill (queued), the stall
 watchdog (queued)
 

@@ -1,9 +1,9 @@
 ---
-name: claude-codex-cursor-loop
+name: c-cube-loop
 description: Run isolated Codex implementation and read-only Cursor verification for one task or multi-plan campaigns with exit-code gates; use when asked to execute a plan, compare campaign candidates, coordinate dependency or merge units, inspect status or the local dashboard, run diagnostic checks with doctor, scaffold plan.md and gate.json with init, or publish a completed run.
 ---
 
-# claude-codex-cursor-loop
+# c-cube-loop
 
 The controller (this Claude session) authors a plan, then invokes:
 

@@ -21,8 +21,8 @@ const installerPath = fileURLToPath(new URL('../install.mjs', import.meta.url));
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const skillPath = fileURLToPath(new URL('../SKILL.md', import.meta.url));
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url));
-const currentName = 'claude-codex-cursor-loop';
-const previousName = ['run', 'claude', 'codex', 'cursor', 'loop'].join('-');
+const currentName = 'c-cube-loop';
+const previousName = ['claude', 'codex', 'cursor', 'loop'].join('-');
 
 function frontmatter(path) {
   const text = readFileSync(path, 'utf8');
@@ -74,7 +74,7 @@ function expectedRemovalCommand(path) {
   return `rm -rf -- '${path.replaceAll("'", "'\\''")}'`;
 }
 
-test('package and skill identifiers are claude-codex-cursor-loop and shipped text has no stale identifier', () => {
+test('package and skill identifiers are c-cube-loop and shipped text has no stale identifier', () => {
   const pkg = JSON.parse(readFileSync(packagePath, 'utf8'));
   const skill = frontmatter(skillPath);
   assert.equal(pkg.name, currentName);
@@ -102,7 +102,7 @@ test('SKILL.md description covers campaigns and diagnostics', () => {
   assert.match(description, /diagnostic|doctor/i);
 });
 
-test('installer defaults to claude-codex-cursor-loop and --name overrides the install directory', () => {
+test('installer defaults to c-cube-loop and --name overrides the install directory', () => {
   if (!existsSync(installerPath)) {
     assert.ok(existsSync(packagePath), 'installed-copy self-test must still run from the payload');
     return;
@@ -143,7 +143,7 @@ test('installer warns about a superseded install without deleting it and is sile
     assert.equal(present.status, 0, output(present));
     assert.match(output(present), /WARNING: previous skill install detected:/);
     assert.ok(output(present).includes(previousPath), 'the warning must name the old directory');
-    assert.match(output(present), /superseded by claude-codex-cursor-loop/);
+    assert.match(output(present), /superseded by c-cube-loop/);
     assert.ok(output(present).includes(expectedRemovalCommand(previousPath)),
       'the warning must print the exact platform removal command');
     assert.ok(existsSync(previousPath), 'the installer must not remove the previous install');
@@ -156,12 +156,12 @@ test('README starts with a copyable quickstart whose loop commands are real comm
   const readme = readFileSync(readmePath, 'utf8');
   // One badge line may sit between the heading and the description — universal convention,
   // and it buries nothing. Everything else stays strict.
-  const match = /^# claude-codex-cursor-loop\r?\n\r?\n(?:\[!\[[^\r\n]*\r?\n\r?\n)?([^\r\n]+)\r?\n\r?\n```sh\r?\n([\s\S]*?)\r?\n```/.exec(readme);
+  const match = /^# c-cube-loop\r?\n\r?\n(?:\[!\[[^\r\n]*\r?\n\r?\n)?([^\r\n]+)\r?\n\r?\n```sh\r?\n([\s\S]*?)\r?\n```/.exec(readme);
   assert.ok(match, 'the heading, an optional single badge line, and a one-line description must be followed immediately by the quickstart');
   const lines = match[2].split(/\r?\n/);
   assert.deepEqual(lines, [
-    'git clone https://github.com/ortimusirig/claude-codex-cursor-loop.git',
-    'cd claude-codex-cursor-loop',
+    'git clone https://github.com/ortimusirig/c-cube-loop.git',
+    'cd c-cube-loop',
     'node install.mjs',
     'node bin/loop.js doctor',
     'node bin/loop.js init ../ccc-loop-demo',
