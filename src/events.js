@@ -266,7 +266,7 @@ function command(event) {
   return [oneLine(event.bin), ...args].filter(Boolean).join(' ');
 }
 
-function detailFor(event) {
+export function detailFor(event) {
   const attempt = event.attempt === undefined ? '' : ` attempt=${event.attempt}`;
   if (event.type === 'stalled') {
     const last = event.lastEvent ?? {};

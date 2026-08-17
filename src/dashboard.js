@@ -7,14 +7,17 @@ import {
   buildDashboardSnapshot,
   renderDashboardContent,
   renderDashboardPage,
+  renderLogRows,
   renderRunDetail,
   snapshotForClient,
 } from './dashboard-view.js';
+import { LogRunNotFoundError, queryLogs } from './log-query.js';
 
 export {
   buildDashboardSnapshot,
   renderDashboardContent,
   renderDashboardPage,
+  renderLogRows,
   renderRunDetail,
 } from './dashboard-view.js';
 
@@ -77,6 +80,14 @@ export function createDashboardObserver(options, pollIntervalMs = 250) {
       const current = refresh();
       const run = current.runs.find((candidate) => candidate.runId === runId);
       return run ? renderRunDetail(run) : null;
+    },
+    logs(runId, problemsOnly = false) {
+      try {
+        return renderLogRows(queryLogs({ ...options, runId, problemsOnly }), { problemsOnly });
+      } catch (error) {
+        if (error instanceof LogRunNotFoundError) return null;
+        throw error;
+      }
     },
     connect(request, response) {
       response.writeHead(200, {
@@ -146,6 +157,36 @@ export async function startDashboard({
     if (request.method === 'GET' && requestUrl.pathname === '/detail') {
       const runId = requestUrl.searchParams.get('runId');
       const html = runId === null ? null : observer.detail(runId);
+      if (html === null) {
+        response.writeHead(404, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        response.end('Pass not found\n');
+        return;
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      response.end(html);
+      return;
+    }
+    if (request.method === 'GET' && requestUrl.pathname === '/logs') {
+      const runId = requestUrl.searchParams.get('runId');
+      const problemsOnly = requestUrl.searchParams.get('problemsOnly') === 'true';
+      let html;
+      try {
+        html = observer.logs(runId, problemsOnly);
+      } catch (error) {
+        response.writeHead(500, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        response.end(`Cannot read logs: ${error.message}\n`);
+        return;
+      }
       if (html === null) {
         response.writeHead(404, {
           'Content-Type': 'text/plain; charset=utf-8',

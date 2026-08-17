@@ -23,9 +23,11 @@ import {
   inferSessions,
   MAX_RENDERED_DIFF_BYTES,
   renderDashboardPage,
+  renderLogRows,
   renderRunDetail,
   renderSessionList,
   runNeedsAttention,
+  snapshotForClient,
 } from '../src/dashboard-view.js';
 import { spawnCapture } from '../src/spawn.js';
 
@@ -131,10 +133,111 @@ test('dashboard starts on loopback, serves one self-contained page, and shows cu
     assert.match(html, /Current stage<\/span><strong>executor<\/strong>/,
       'the served document itself must carry the current stage');
     assert.match(html, /new EventSource\('\/events'\)/);
+    assert.match(html, /data-view="logs" aria-pressed="false">Logs<\/button>/);
+    assert.match(html, /data-view-panel="logs" hidden/);
     assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/i,
       'the page must make no external asset requests');
   } finally {
     await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Logs fetches raw cross-run rows on demand, filters problems, and rejects an unknown run', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-logs-'));
+  const first = 'logs-run-a';
+  const second = 'logs-run-b';
+  makeRun(root, first, [
+    event(first, 'executor', 'item_completed', {
+      ts: '2026-08-15T00:00:01.000Z', itemType: 'reasoning', file: 'raw-a.js',
+    }),
+    event(first, 'executor', 'item_completed', {
+      ts: '2026-08-15T00:00:02.000Z', itemType: 'message', tokens: { outputTokens: 9 },
+    }),
+  ]);
+  makeRun(root, second, [
+    event(second, 'gate', 'gate_command', {
+      ts: '2026-08-15T00:00:03.000Z', bin: 'npm', args: ['test'], code: 0,
+    }),
+    event(second, 'gate', 'gate_command', {
+      ts: '2026-08-15T00:00:04.000Z', bin: 'npm', args: ['run', 'lint'], code: 5,
+    }),
+  ]);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
+    const all = await fetch(new URL('logs?runId=all&problemsOnly=false', dashboard.url));
+    assert.equal(all.status, 200);
+    assert.match(all.headers.get('content-type'), /^text\/html/);
+    const allHtml = await all.text();
+    assert.match(allHtml, /data-collapsed-count="2"/);
+    assert.match(allHtml, /2 executor\/item_completed events/);
+    assert.match(allHtml, /raw-a[.]js/,
+      'the collapsed children retain raw-only fields and are not discarded');
+    assert.match(allHtml, /&quot;outputTokens&quot;: 9/);
+    assert.match(allHtml, /data-log-run-id="logs-run-a"/);
+    assert.match(allHtml, /data-log-run-id="logs-run-b"/);
+    assert.match(allHtml, /npm run lint code=5/,
+      'the view uses the shared stage-aware event phrasing');
+
+    const problems = await fetch(new URL('logs?runId=all&problemsOnly=true', dashboard.url));
+    assert.equal(problems.status, 200);
+    const problemsHtml = await problems.text();
+    assert.match(problemsHtml, /npm run lint code=5/);
+    assert.doesNotMatch(problemsHtml, /npm test code=0/);
+    assert.doesNotMatch(problemsHtml, /raw-a[.]js/);
+
+    const selected = await fetch(new URL(`logs?runId=${first}`, dashboard.url));
+    const selectedHtml = await selected.text();
+    assert.match(selectedHtml, /data-log-run-id="logs-run-a"/);
+    assert.doesNotMatch(selectedHtml, /data-log-run-id="logs-run-b"/);
+
+    const missing = await fetch(new URL('logs?runId=not-a-run', dashboard.url));
+    assert.equal(missing.status, 404);
+    assert.equal(await missing.text(), 'Pass not found\n');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('log row rendering exposes every folded record when expanded', () => {
+  const records = [1, 2].map((index) => ({
+    ts: `2026-08-15T00:00:0${index}.000Z`, runId: 'render-group',
+    stage: 'executor', type: 'item_completed', itemType: `raw-${index}`,
+  }));
+  const rows = records.map((record) => ({
+    ...record, kind: 'event', sourceRunId: record.runId,
+    detail: `item=${record.itemType}`, event: record,
+  }));
+  const html = renderLogRows([{
+    kind: 'group', groupType: 'executor/item_completed', count: 2,
+    runId: 'render-group', runIds: ['render-group'], rows, records,
+  }]);
+  assert.match(html, /data-collapsed-count="2"/);
+  assert.equal((html.match(/class="log-row"/g) ?? []).length, 2);
+  assert.match(html, /raw-1/);
+  assert.match(html, /raw-2/);
+});
+
+test('the SSE client snapshot retains its exact pre-Logs field set', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-snapshot-shape-'));
+  const runId = 'snapshot-shape';
+  const run = makeRun(root, runId, [
+    event(runId, 'executor', 'file_change', { file: 'shape.js', attempt: 1 }),
+  ]);
+  try {
+    const client = snapshotForClient(buildDashboardSnapshot({ runDirectory: run.directory }));
+    assert.deepEqual(Object.keys(client).sort(), [
+      'liveUnits', 'message', 'mode', 'observedAt', 'runs', 'sourcePath',
+    ]);
+    assert.deepEqual(Object.keys(client.runs[0]).sort(), [
+      'currentStage', 'currentType', 'endTs', 'files', 'filesChanged', 'lastEventTs',
+      'message', 'needsAttention', 'runId', 'startTs', 'state', 'timeline', 'triage',
+    ]);
+    assert.equal(Object.hasOwn(client, 'logs'), false);
+    assert.equal(Object.hasOwn(client.runs[0], 'events'), false);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -376,6 +479,9 @@ test('dashboard serving and SSE observation leave every run byte unchanged', asy
     dashboard = await startDashboard({ runDirectory: run.directory, port: 0, pollIntervalMs: 25 });
     const html = await page(dashboard);
     assert.match(html, /class="state finished">Finished/);
+    const logs = await fetch(new URL('logs?runId=all', dashboard.url));
+    assert.equal(logs.status, 200);
+    await logs.text();
     stream = await openSse(dashboard.url);
     await stream.waitFor(/event: snapshot/);
   } finally {
@@ -519,6 +625,7 @@ test('triage is the default collapsed view with visible heuristic and attention 
   assert.match(html, /data-view-panel="triage">/);
   assert.match(html, /data-view-panel="live" hidden/);
   assert.match(html, /data-view-panel="detail" hidden/);
+  assert.match(html, /data-view-panel="logs" hidden/);
   assert.match(html, /Inferred session gap threshold[\s\S]*value="2"[\s\S]*Heuristic only/);
   assert.match(html, /id="attention-only" type="checkbox" checked/);
   assert.match(html, /<details class="session"[^>]*>/);

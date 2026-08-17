@@ -16,6 +16,7 @@ import {
   assertEventConformance,
   CAMPAIGN_EVENT_PAIRS,
   createEvent,
+  detailFor,
   EVENT_PAIRS,
   EVENT_STAGES,
   formatEventSummary,
@@ -66,6 +67,18 @@ test('event construction protects the envelope and summaries stay bounded to one
   assert.ok(summary.length <= MAX_EVENT_SUMMARY_LENGTH);
   assert.doesNotMatch(summary, /[\r\n]/);
   assert.doesNotMatch(summary, /must never be rendered/);
+});
+
+test('exporting detailFor preserves the exact heartbeat summary phrasing', () => {
+  const event = {
+    ts: '2026-08-15T00:00:00.000Z', runId: 'summary-control',
+    stage: 'gate', type: 'gate_command', bin: 'npm', args: ['test'], code: 0,
+  };
+  assert.equal(detailFor(event), 'npm test code=0');
+  assert.equal(
+    formatEventSummary(event),
+    '[ccc] 2026-08-15T00:00:00.000Z gate/gate_command npm test code=0',
+  );
 });
 
 test('event construction validates declared pairs and campaign identity vocabulary', () => {
