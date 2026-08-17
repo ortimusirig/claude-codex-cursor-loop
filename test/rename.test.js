@@ -91,8 +91,28 @@ test('package and skill identifiers are c-cube-loop and shipped text has no stal
     .flatMap((entry) => walk(join(root, entry)))
     .filter((path) => /[.](?:js|mjs|json|jsonl|md|ps1|cmd)$/i.test(path));
   assert.ok(checked.length > 0, 'positive control: source, documentation, and config files were found');
-  const stale = checked.filter((path) => readFileSync(path, 'utf8').includes(previousName));
+  // The GitHub repository was not renamed alongside the skill, so its URL legitimately
+  // contains the superseded name. Strip github.com URLs before scanning: this assertion
+  // forbids a stale skill IDENTIFIER, not a real repository address. Blanket-forbidding
+  // the string once produced a README whose clone URL 404ed.
+  const withoutRepositoryUrls = (text) => text.replaceAll(
+    /github[.]com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+/g,
+    '<repository-url>',
+  );
+  const stale = checked
+    .filter((path) => withoutRepositoryUrls(readFileSync(path, 'utf8')).includes(previousName));
   assert.deepEqual(stale, [], `stale skill identifier remains in: ${stale.join(', ')}`);
+
+  // Positive control: the scan must still catch the identifier outside a URL, or the
+  // exception above would silently disable the whole assertion.
+  assert.ok(
+    withoutRepositoryUrls(`the ${previousName} skill`).includes(previousName),
+    'the URL exception must not suppress a genuine stale identifier',
+  );
+  assert.ok(
+    !withoutRepositoryUrls(`https://github.com/owner/${previousName}.git`).includes(previousName),
+    'a repository URL must not be reported as a stale identifier',
+  );
 });
 
 test('SKILL.md description covers campaigns and diagnostics', () => {
@@ -160,7 +180,7 @@ test('README starts with a copyable quickstart whose loop commands are real comm
   assert.ok(match, 'the heading, an optional single badge line, and a one-line description must be followed immediately by the quickstart');
   const lines = match[2].split(/\r?\n/);
   assert.deepEqual(lines, [
-    'git clone https://github.com/ortimusirig/c-cube-loop.git',
+    'git clone https://github.com/ortimusirig/claude-codex-cursor-loop.git c-cube-loop',
     'cd c-cube-loop',
     'node install.mjs',
     'node bin/loop.js doctor',

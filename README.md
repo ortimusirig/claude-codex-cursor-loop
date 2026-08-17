@@ -1,17 +1,21 @@
 # c-cube-loop
 
-[![tests](https://github.com/ortimusirig/c-cube-loop/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/c-cube-loop/actions/workflows/tests.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
+[![tests](https://github.com/ortimusirig/claude-codex-cursor-loop/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/claude-codex-cursor-loop/actions/workflows/tests.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
 
 Codex writes in a git-isolated copy, command exit codes gate the change, and Cursor reviews it read-only.
 
 ```sh
-git clone https://github.com/ortimusirig/c-cube-loop.git
+git clone https://github.com/ortimusirig/claude-codex-cursor-loop.git c-cube-loop
 cd c-cube-loop
 node install.mjs
 node bin/loop.js doctor
 node bin/loop.js init ../ccc-loop-demo
 node bin/loop.js run --task ../ccc-loop-demo/plan.md --target ../ccc-loop-demo --gate ../ccc-loop-demo/gate.json
 ```
+
+> The repository at <https://github.com/ortimusirig/claude-codex-cursor-loop> keeps its
+> original name; the skill it installs is `c-cube-loop`. The clone command above checks it
+> out into a `c-cube-loop` folder so the two agree locally.
 
 ## What you need
 
