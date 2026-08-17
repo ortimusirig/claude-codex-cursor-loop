@@ -46,6 +46,25 @@ function makeRun(root, runId, events, suffix = '') {
   return { directory, work, eventsPath: join(work, 'events.jsonl') };
 }
 
+function makeCampaign(root, campaignId, units, events = [], suffix = '') {
+  const directory = join(root, campaignId);
+  mkdirSync(directory, { recursive: true });
+  const start = {
+    ts: '2026-08-15T00:00:00.000Z', runId: campaignId, campaignId, round: 1,
+    unitId: null, unitKind: null, stage: 'campaign', type: 'start',
+    topology: {
+      units,
+      edges: units.flatMap((unit) => unit.parents.map((parentUnitId) => ({
+        parentUnitId, childUnitId: unit.unitId,
+      }))),
+    },
+  };
+  const records = [start, ...events];
+  writeFileSync(join(directory, 'campaign-events.jsonl'),
+    `${records.map(JSON.stringify).join('\n')}\n${suffix}`);
+  return directory;
+}
+
 async function page(dashboard) {
   const response = await fetch(dashboard.url);
   assert.equal(response.status, 200);
@@ -135,6 +154,8 @@ test('dashboard starts on loopback, serves one self-contained page, and shows cu
     assert.match(html, /new EventSource\('\/events'\)/);
     assert.match(html, /data-view="logs" aria-pressed="false">Logs<\/button>/);
     assert.match(html, /data-view-panel="logs" hidden/);
+    assert.match(html, /data-view="graph" aria-pressed="false">Graph<\/button>/);
+    assert.match(html, /data-view-panel="graph" hidden/);
     assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/i,
       'the page must make no external asset requests');
   } finally {
@@ -201,6 +222,106 @@ test('Logs fetches raw cross-run rows on demand, filters problems, and rejects a
   }
 });
 
+test('Graph is a fifth on-demand view with campaign selection, live stage enrichment, and 404s', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-graph-'));
+  makeCampaign(root, 'campaign-a', [
+    { unitId: 'a-root', unitKind: 'node', parents: [] },
+  ]);
+  makeCampaign(root, 'campaign-b', [
+    { unitId: 'b-parent', unitKind: 'node', parents: [] },
+    { unitId: 'b-child', unitKind: 'node', parents: ['b-parent'] },
+  ], [], '{"stage":"unit","type":"start"');
+  makeRun(root, 'b-child', [
+    event('b-child', 'gate', 'start', {
+      ts: '2026-08-15T00:00:02.000Z', campaignId: 'campaign-b', round: 1,
+      unitId: 'b-child', unitKind: 'node', attempt: 1,
+    }),
+  ]);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
+    const html = await page(dashboard);
+    assert.match(html, /data-view="graph" aria-pressed="false">Graph<\/button>/);
+    assert.match(html, /data-view-panel="graph" hidden/);
+    assert.match(html, /<select id="graph-campaign">[\s\S]*campaign-a[\s\S]*campaign-b/);
+    assert.match(html, /fetch\('\/graph\?campaignId='/,
+      'the graph must be fetched only after the view is opened');
+    assert.doesNotMatch(html, /class="campaign-graph"/,
+      'the initial dashboard response must not inline graph data');
+
+    const response = await fetch(new URL('graph?campaignId=campaign-b', dashboard.url));
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/html/);
+    const graphHtml = await response.text();
+    assert.match(graphHtml, /class="campaign-graph"/);
+    assert.match(graphHtml,
+      /data-parent-unit-id="b-parent" data-child-unit-id="b-child"/);
+    assert.match(graphHtml, /data-unit-id="b-child"[\s\S]*Running . gate/,
+      'the on-demand read may enrich orchestration state from the unit stream');
+    assert.doesNotMatch(graphHtml, /stage&quot;:|events\.jsonl/,
+      'the SVG should expose the graph model, not raw event records');
+
+    const missing = await fetch(new URL('graph?campaignId=not-a-campaign', dashboard.url));
+    assert.equal(missing.status, 404);
+    assert.equal(await missing.text(), 'Campaign not found\n');
+  } finally {
+    await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Graph explains empty scratch roots and single-run dashboards', async () => {
+  const emptyRoot = mkdtempSync(join(tmpdir(), 'ccc-dashboard-empty-graph-'));
+  const runRoot = mkdtempSync(join(tmpdir(), 'ccc-dashboard-run-graph-'));
+  const run = makeRun(runRoot, 'single-run', [event('single-run', 'executor', 'start')]);
+  let emptyDashboard;
+  let runDashboard;
+  try {
+    emptyDashboard = await startDashboard({ scratchRoot: emptyRoot, port: 0 });
+    const emptyPage = await page(emptyDashboard);
+    assert.match(emptyPage, /No campaigns are available in this scratch root yet/);
+    const emptyGraph = await fetch(new URL('graph', emptyDashboard.url));
+    assert.equal(emptyGraph.status, 200);
+    assert.match(await emptyGraph.text(), /No campaigns are available in this scratch root yet/);
+
+    runDashboard = await startDashboard({ runDirectory: run.directory, port: 0 });
+    const runPage = await page(runDashboard);
+    assert.match(runPage, /single-run dashboard has no campaign topology/);
+    const runGraph = await fetch(new URL('graph', runDashboard.url));
+    assert.equal(runGraph.status, 200);
+    assert.match(await runGraph.text(), /single-run dashboard has no campaign topology/);
+    const unknown = await fetch(new URL('graph?campaignId=unknown', runDashboard.url));
+    assert.equal(unknown.status, 404);
+  } finally {
+    await emptyDashboard?.close();
+    await runDashboard?.close();
+    rmSync(emptyRoot, { recursive: true, force: true });
+    rmSync(runRoot, { recursive: true, force: true });
+  }
+});
+
+test('serving a campaign graph leaves every observed byte unchanged', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-graph-readonly-'));
+  makeCampaign(root, 'readonly-campaign', [
+    { unitId: 'readonly-unit', unitKind: 'node', parents: [] },
+  ]);
+  makeRun(root, 'readonly-unit', [event('readonly-unit', 'executor', 'start', {
+    campaignId: 'readonly-campaign', round: 1, unitId: 'readonly-unit', unitKind: 'node',
+  })]);
+  const before = snapshotContents(root);
+  let dashboard;
+  try {
+    dashboard = await startDashboard({ scratchRoot: root, port: 0, pollIntervalMs: 25 });
+    const response = await fetch(new URL('graph?campaignId=readonly-campaign', dashboard.url));
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /readonly-unit/);
+  } finally {
+    await dashboard?.close();
+  }
+  assert.deepEqual(snapshotContents(root), before);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('log row rendering exposes every folded record when expanded', () => {
   const records = [1, 2].map((index) => ({
     ts: `2026-08-15T00:00:0${index}.000Z`, runId: 'render-group',
@@ -220,7 +341,7 @@ test('log row rendering exposes every folded record when expanded', () => {
   assert.match(html, /raw-2/);
 });
 
-test('the SSE client snapshot retains its exact pre-Logs field set', () => {
+test('the SSE client snapshot retains its exact on-demand-view-independent field set', () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-snapshot-shape-'));
   const runId = 'snapshot-shape';
   const run = makeRun(root, runId, [
@@ -236,6 +357,8 @@ test('the SSE client snapshot retains its exact pre-Logs field set', () => {
       'message', 'needsAttention', 'runId', 'startTs', 'state', 'timeline', 'triage',
     ]);
     assert.equal(Object.hasOwn(client, 'logs'), false);
+    assert.equal(Object.hasOwn(client, 'graph'), false);
+    assert.equal(Object.hasOwn(client, 'campaigns'), false);
     assert.equal(Object.hasOwn(client.runs[0], 'events'), false);
   } finally {
     rmSync(root, { recursive: true, force: true });

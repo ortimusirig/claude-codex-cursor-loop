@@ -78,10 +78,14 @@ test('run imports only the dashboard launcher, never the server or view', () => 
   assert.match(cli, /^import \{[\s\S]*?launchDashboard[\s\S]*?from '\.\.\/src\/dashboard-launcher[.]js';/m);
   assert.doesNotMatch(cli, /^import .*src\/dashboard(?:-view)?[.]js/m,
     'the run module graph must not statically load dashboard polling or rendering');
+  assert.doesNotMatch(cli, /src\/campaign-graph[.]js/,
+    'loop run and batch startup must not statically load the observer-only graph module');
   assert.doesNotMatch(cli, /src\/log-query[.]js/,
     'the run module graph must not load the observer-only raw log query');
   assert.doesNotMatch(launcher, /from ['"].*dashboard(?:-view)?[.]js['"]|import\(['"].*dashboard(?:-view)?[.]js['"]\)/,
     'the importable launcher must remain separate from server and view code');
+  assert.doesNotMatch(launcher, /campaign-graph[.]js/,
+    'the importable launcher must remain separate from graph modeling and SVG rendering');
   assert.doesNotMatch(launcher, /from ['"].*log-query[.]js['"]|import\(['"].*log-query[.]js['"]\)/,
     'the importable launcher must remain separate from observer-only log querying');
   assert.match(cli,

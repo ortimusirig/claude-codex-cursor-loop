@@ -60,6 +60,8 @@ test('correctness and intent findings are separately lifted while verdict is mer
     },
   });
   assert.equal(facts.verdict, 'ISSUES');
+  assert.equal(facts.correctnessVerdict, 'NO_BLOCKERS');
+  assert.equal(facts.correctnessVerdictSource, 'result');
   assert.equal(facts.verifierFindings, 'The implementation is internally correct.');
   assert.equal(facts.verdictSource, 'result');
   assert.equal(facts.verifierPlan, null);
@@ -139,6 +141,8 @@ test('executor retries accumulate usage and model overrides reach both agents an
       reasoningOutputTokens: 3, cacheWriteTokens: 6 },
   });
   assert.equal(facts.verdictSource, 'plan');
+  assert.equal(facts.correctnessVerdict, 'ISSUES');
+  assert.equal(facts.correctnessVerdictSource, 'plan');
   assert.equal(facts.verifierPlan, '# Review\n\nISSUES');
   assert.equal(facts.intentVerifierFindings, 'Intent is covered.');
   assert.equal(facts.intentVerdict, 'NO_BLOCKERS');

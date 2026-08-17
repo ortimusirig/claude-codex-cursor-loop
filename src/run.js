@@ -502,6 +502,8 @@ export async function run(opts) {
 
   const lastVerifier = iterations.at(-1)?.verifier;
   const verifierFindings = lastVerifier?.findings ?? null;
+  const correctnessVerdict = lastVerifier?.verdict ?? null;
+  const correctnessVerdictSource = lastVerifier?.verdictSource ?? null;
   const verdictSource = lastVerifier?.verdictSource ?? null;
   const verifierPlan = lastVerifier?.plan ?? null;
   const verifierEvidence = lastVerifier?.verdictEvidence ?? null;
@@ -539,7 +541,8 @@ export async function run(opts) {
   };
   const facts = buildRunFacts({ runId, target, dir: iso.dir, isRepo: iso.isRepo,
     baseRef: iso.baseRef, baseCommit: iso.baseCommit, branch: iso.branch,
-    iterations, gateStatus, verdict, verdictSource, verifierFindings,
+    iterations, gateStatus, verdict, verdictSource,
+    correctnessVerdict, correctnessVerdictSource, verifierFindings,
     verifierPlan, verifierEvidence, verifierConsistency,
     intentVerifierFindings, intentVerdict, intentVerdictSource,
     intentVerifierPlan, intentVerifierEvidence, intentVerifierConsistency,

@@ -84,6 +84,8 @@ test('verifier findings reach both the facts and the markdown report', () => {
 test('facts carry an explicit null when no findings were recorded', () => {
   assert.equal(facts.verifierFindings, null);
   assert.equal(facts.verdictSource, null);
+  assert.equal(facts.correctnessVerdict, null);
+  assert.equal(facts.correctnessVerdictSource, null);
   assert.equal(facts.verifierPlan, null);
   assert.equal(facts.intentVerifierFindings, null);
   assert.equal(facts.intentVerdict, null);

@@ -248,8 +248,11 @@ delta, and token cost. It computes no winner, ranking, or score. Its single-writ
 `campaign-events.jsonl` lives at the
 `campaignEventsPath` reported in that document, outside every unit worktree. The campaign
 stream contains campaign and round boundaries plus unit lifecycle records, including explicit
-`waiting`, `released`, and `skipped` records for dependency edges; detailed stage
-events remain in each unit's own stream. Campaign/round records carry null unit identity
+`waiting`, `released`, and `skipped` records. `campaign/start` carries the complete resolved
+topologyâ€”every unit, parent list, and edge, after merge promotionâ€”so consumers never need to
+infer structure from whichever runtime transitions happened to occur. Later iterative rounds
+record their newly resolved topology on `round/start`; detailed stage events remain in each
+unit's own stream. Campaign/round records carry null unit identity
 because they describe no individual unit; unit lifecycle and per-unit records carry the exact
 `campaignId`, round, `unitId`, and `unitKind`.
 
@@ -277,7 +280,7 @@ isolated `w` directory, its parent run directory, or a campaign directory contai
 `campaign-events.jsonl`. It tolerates a final line that is still being appended, distinguishes
 every campaign unit, and never writes to the run or signals its processes.
 
-`dashboard` serves three in-page views over live event data and completed run facts. Triage is
+`dashboard` serves five in-page views over live event data and completed run facts. Triage is
 the default: it groups passes into collapsed, newest-first sessions using an explicitly
 heuristic two-hour start-time gap. The threshold can be changed in the page without persisting
 an assignment, and the needs-attention filter is on by default. Live shows each in-flight
@@ -286,7 +289,11 @@ watchdog stall. Detail renders one selected pass, including both labelled verifi
 sources, evidence-consistency status, executor rationale, seat tokens, a copyable
 `code "<worktree>"` command, and a byte-capped line-coloured `CHANGES.diff`. A source of `none`
 is called out as an unknown fail-safe default rather than a reviewer finding. Pass a run
-directory for one pass,
+directory for one pass. Logs fetches the ordered raw stream on demand, with its problems-only
+filter and expandable executor groups. Graph fetches one campaign on demand and draws its
+declared dependency topology as deterministic layered SVG, distinguishing waiting, running,
+finished, skipped, and unreached units. Fan-in and auto-promoted merge units are explicit, and
+correctness, intent, and merged verdicts retain separate labels. Pass a run directory for one pass,
 `--scratch-root <directory>` for every run under a campaign root, or neither to use
 `CCC_SCRATCH_ROOT` and its platform default. It listens only on
 `127.0.0.1`, prints its URL on stdout, and uses fixed port `7331` unless `--port` is set. If

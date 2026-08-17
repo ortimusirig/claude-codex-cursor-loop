@@ -48,6 +48,22 @@ export { CAMPAIGN_EVENTS_FILENAME } from './event-stream.js';
 
 const KINDS = new Set(UNIT_KINDS);
 
+function resolvedTopology(units) {
+  return {
+    units: units.map((unit) => ({
+      unitId: unit.unitId,
+      unitKind: unit.unitKind,
+      parents: [...unit.parents],
+      ...(unit.baseRef === undefined ? {} : { baseRef: unit.baseRef }),
+      ...(unit.branch === undefined ? {} : { branch: unit.branch }),
+    })),
+    edges: units.flatMap((unit) => unit.parents.map((parentUnitId) => ({
+      parentUnitId,
+      childUnitId: unit.unitId,
+    }))),
+  };
+}
+
 export function countUsageTokens(usage) {
   const normalized = addUsage(EMPTY_USAGE, usage);
   // Count total input plus total output: those are the tokens actually consumed for the
@@ -83,8 +99,12 @@ function candidateVerdict(facts, pass) {
     ? facts?.intentVerifierConsistency?.status ?? null
     : facts?.verifierConsistency?.status ?? null;
   return {
-    verdict: intent ? facts?.intentVerdict ?? null : facts?.verdict ?? null,
-    source: intent ? facts?.intentVerdictSource ?? null : facts?.verdictSource ?? null,
+    verdict: intent
+      ? facts?.intentVerdict ?? null
+      : facts?.correctnessVerdict ?? facts?.verdict ?? null,
+    source: intent
+      ? facts?.intentVerdictSource ?? null
+      : facts?.correctnessVerdictSource ?? facts?.verdictSource ?? null,
     consistency,
     selfConsistent: consistency === null ? null : consistency === 'consistent',
   };
@@ -99,8 +119,8 @@ function observedCandidateTestCount(facts) {
 function plannerReview(entry) {
   const facts = entry.facts;
   const correctness = facts === null ? null : {
-    verdict: facts?.verdict ?? null,
-    source: facts?.verdictSource ?? null,
+    verdict: facts?.correctnessVerdict ?? facts?.verdict ?? null,
+    source: facts?.correctnessVerdictSource ?? facts?.verdictSource ?? null,
     findings: facts?.verifierFindings ?? null,
     consistency: facts?.verifierConsistency?.status ?? null,
   };
@@ -207,6 +227,7 @@ async function runCampaignRound(options) {
   ));
   if (candidateSet) validateCandidateSet(units);
   validateDependencyGraph(units);
+  const declaredTopology = resolvedTopology(units);
   if (plannerSynthesis !== undefined
     && typeof plannerSynthesis !== 'function'
     && (plannerSynthesis === null || typeof plannerSynthesis !== 'object'
@@ -223,6 +244,7 @@ async function runCampaignRound(options) {
       unitCount: units.length,
       concurrency,
       tokenBudget,
+      topology: declaredTopology,
       ...(candidateSet ? {
         campaignShape: CAMPAIGN_SHAPES[1],
         alternatives: true,
@@ -237,6 +259,7 @@ async function runCampaignRound(options) {
     unitCount: units.length,
     campaignShape: candidateSet ? CAMPAIGN_SHAPES[1] : CAMPAIGN_SHAPES[0],
     alternatives: candidateSet,
+    ...(!_emitCampaignLifecycle && round > 1 ? { topology: declaredTopology } : {}),
   });
   if (observed) {
     for (const unit of units.filter((candidate) => candidate.unitKind === 'candidate')) {
@@ -521,15 +544,17 @@ async function runCampaignRound(options) {
           unitId: unit.unitId,
           unitKind: unit.unitKind,
         };
+        const topology = unit.parents.length === 0
+          ? (unit.baseRef === undefined ? {} : { baseRef: unit.baseRef })
+          : inheritedTopologies.get(unitIndex);
         lifecycle(unit.unitId, 'unit', 'start', {
           index: unit.index,
+          baseRef: topology?.baseRef ?? 'HEAD',
+          branch: unit.branch ?? `ccc/${unit.unitId}`,
           ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
           ...(candidateSet ? { alternative: true } : {}),
         }, identity);
         const unitReporter = reporterForUnit(unitReporterFactory, unit, identity);
-        const topology = unit.parents.length === 0
-          ? (unit.baseRef === undefined ? {} : { baseRef: unit.baseRef })
-          : inheritedTopologies.get(unitIndex);
 
         Promise.resolve().then(async () => {
           let runTopology = topology;
@@ -650,6 +675,14 @@ async function runCampaignRound(options) {
           lifecycle(unit.unitId, 'unit', 'finish', {
             index: unit.index,
             outcome: facts?.outcome ?? 'unknown',
+            gateStatus: facts?.gateStatus ?? null,
+            correctnessVerdict: facts?.correctnessVerdict ?? null,
+            correctnessVerdictSource: facts?.correctnessVerdictSource ?? null,
+            intentVerdict: facts?.intentVerdict ?? null,
+            intentVerdictSource: facts?.intentVerdictSource ?? null,
+            mergedVerdict: facts?.verdict ?? null,
+            branch: facts?.branch ?? null,
+            baseRef: facts?.baseRef ?? null,
             consumedTokens,
             ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
             ...(candidateSet ? { alternative: true } : {}),
@@ -660,6 +693,14 @@ async function runCampaignRound(options) {
           lifecycle(unit.unitId, 'unit', 'finish', {
             index: unit.index,
             outcome: 'internal-error',
+            gateStatus: null,
+            correctnessVerdict: null,
+            correctnessVerdictSource: null,
+            intentVerdict: null,
+            intentVerdictSource: null,
+            mergedVerdict: null,
+            branch: null,
+            baseRef: null,
             error: entry.error.message,
             consumedTokens,
           }, identity);
@@ -954,7 +995,11 @@ function validateIterativeRound(tasks, campaignId, seenUnitIds, expectedBaseRef)
   if (expectedBaseRef !== undefined && baseRef !== expectedBaseRef) {
     throw new Error('every iterative round must use the same campaign base ref');
   }
-  return { baseRef, unitIds: normalized.map((unit) => unit.unitId) };
+  return {
+    baseRef,
+    unitIds: normalized.map((unit) => unit.unitId),
+    topology: resolvedTopology(normalized),
+  };
 }
 
 function groupedRoundResult(result) {
@@ -1084,6 +1129,7 @@ export async function runCampaign(options) {
           maxRounds: configuration.maxRounds,
           campaignShape: CAMPAIGN_SHAPES[2],
           alternatives: true,
+          topology: validation.topology,
           candidates: tasks.map((task) => ({
             unitId: task.unitId ?? task.runId,
             perspective: task.perspective,
