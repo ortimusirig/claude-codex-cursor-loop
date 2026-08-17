@@ -103,6 +103,7 @@ to run side-by-side with an existing copy).
 ```
 node bin/loop.js run --task <plan-file-or-prose> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--port PORT] [--open] [--no-dashboard] [--quiet]
 node bin/loop.js batch --task <plan-1> --task <plan-2> --target <folder> --gate <gate.json> [--gate-retries M] [--executor-model MODEL] [--executor-effort EFFORT] [--verifier-model MODEL] [--concurrency N] [--token-budget TOKENS] [--rounds N] [--round N ...] [--unit-kind KIND] [--unit-id ID ...] [--perspective NAME ...] [--depends-on CHILD=PARENT ...] [--port PORT] [--open] [--no-dashboard] [--quiet]
+node bin/loop.js batch --campaign <campaign.json> [--port PORT] [--open] [--no-dashboard] [--quiet]
 node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 node bin/loop.js publish <completed-run-directory>
@@ -138,24 +139,25 @@ worktree, gate, two read-only verifier passes, run facts, and `events.jsonl`.
 |---|---:|---|
 | `--concurrency` | 2 | 1–16 simultaneously in-flight units |
 | `--token-budget` | 12,500,000 | positive campaign-wide token count |
-| `--rounds` | 1 | maximum Mode A rounds, from 1–3 |
+| `--rounds` | 1 | maximum candidate-refinement rounds, from 1–3 |
 | `--round` | 1 | round for each `--task`; when used, give once per `--task` |
 | `--unit-kind` | `candidate` | `candidate`, `node`, or `merge`; give once for every task or once per `--task` |
 | `--unit-id` | generated | stable unit ID; when used, give once per `--task` |
-| `--perspective` | none | declares a Mode A candidate set; give one distinct label per `--task` |
+| `--perspective` | none | declares Candidates; give one distinct label per `--task` |
 | `--depends-on` | none | `CHILD=PARENT`; repeat for edges and repeat the same child for fan-in |
+| `--campaign` | none | JSON declaration for a Graph or another campaign; mutually exclusive with campaign-shaping flags |
 
 The budget counts input plus output tokens. Cached input and reasoning output are already
 subsets of those values and are not counted twice. Dispatch stops after completed run facts
 push the campaign over budget; units already in flight are allowed to finish.
 
-Mode A is a homogeneous candidate batch. Declare it with one `--perspective` per task (or by
+Candidates is a homogeneous candidate batch. Declare it with one `--perspective` per task (or by
 explicitly passing `unitKind: 'candidate'` through the programmatic API). Every candidate must
 have a distinct, non-empty perspective, all candidates use the same base, and dependency edges
 are rejected before execution. A bare batch without perspectives retains the original
 independent-task behavior for compatibility.
 
-Iterative Mode A is opt-in with `--rounds 2` or `--rounds 3`. Attribute predeclared CLI
+Rounds is opt-in with `--rounds 2` or `--rounds 3`. Attribute predeclared CLI
 plans with one `--round` per task; perspectives must be distinct within a round, but may recur
 in a later round. The programmatic `runCampaign` API can instead accept `maxRounds` plus a
 `nextRound` callback, which receives the completed round and its attributed reviews before it
@@ -167,6 +169,14 @@ earlier findings but does not inherit an earlier candidate's branch. The token b
 the whole campaign: reaching it prevents another round and further dispatch, while units
 already in flight finish. Iteration stops with `budget-exhausted`, `max-rounds-reached`, or
 `caller-requested`; the aggregate retains every completed round either way.
+
+The [committed campaign design spec](docs/superpowers/specs/2026-08-15-v3-orchestrated-campaigns-design.md) uses historical labels: Mode A maps to Candidates/Rounds, and Mode B maps to Graph.
+
+For a Graph, prefer `batch --campaign <campaign.json>` so topology and unit identities are one
+declaration. The JSON object contains `target`, `gate`, optional campaign settings, and `units`;
+each unit declares `id`, a task-file path in `task`, and optional `dependsOn`. Relative paths are
+resolved from the campaign file's directory. For a small Graph, the equivalent flag form remains
+available: give each task a `--unit-id` and repeat `--depends-on CHILD=PARENT` for every edge.
 
 Dependencies are a declared DAG topology: roots fan out up to the concurrency limit, while a
 dependent waits without occupying a slot. After a successful predecessor finishes, its staged
@@ -187,6 +197,12 @@ as `conflicting-intent` for human direction. Merge gates add a derived test-coun
 of parent counts minus their shared baseline counts, and the merge intent requires a new
 interaction/seam test. Counts come from recognized test-runner summaries emitted by the gate;
 when a gate emits no count, the deterministic fallback counts tracked test files in each Git tree.
+
+The repository lock around worktree administration is in-process only; that scope proves nothing
+about cross-process safety. In the measured experiment, eight concurrent `git worktree add`
+processes all succeeded and `git fsck` stayed clean. Prefer `batch` because it
+schedules, budgets, and records one campaign. The real cross-process hazard is reusing a unit id:
+the execution scratch root is flat, so unit ids collide even across different repositories.
 
 `gate.json` is a JSON array of commands; **pass/fail is by exit code only**:
 
@@ -241,7 +257,7 @@ run-facts document; live event summaries use stderr.
 
 `batch` likewise writes exactly one JSON document to stdout: a `units` array containing each
 unit's identity, dispatch status, and run facts, plus a `rollup` with counts, aggregate usage,
-budget state, and outcome. Mode A also adds an `alternatives` view. It states explicitly that
+budget state, and outcome. A Candidates campaign also adds an `alternatives` view. It states explicitly that
 no selection has been made and keeps each perspective beside its outcome and failure reason,
 both verdicts and their sources, evidence-consistency status, diff path, branch, test-count
 delta, and token cost. It computes no winner, ranking, or score. Its single-writer
@@ -270,7 +286,7 @@ object or callback; without one it explicitly returns the attributed review set 
 inventing a comparison or selection.
 
 An independent or DAG batch exits 0 only when every dispatched unit has a successful existing
-run outcome and the budget was not exceeded. In Mode A, a failed candidate remains evidence and
+run outcome and the budget was not exceeded. In Candidates, a failed candidate remains evidence and
 does not make the candidate set non-zero while another usable alternative completed; if every
 candidate fails, the rollup is `campaign-failed` (exit 6). A budget overage remains
 `budget-exhausted` (exit 7). Failure of one unit never cancels its peers.
