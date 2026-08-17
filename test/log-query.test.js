@@ -78,6 +78,54 @@ test('each problems-only condition qualifies independently', () => {
   }
 });
 
+const queryProblemCases = [
+  ['non-zero code', 'code', { code: 3 }],
+  ['timedOut', 'timed-out', { timedOut: true }],
+  ['stalled event', 'stalled', { stage: 'executor', type: 'stalled' }],
+  ['ISSUES verdict', 'issues', { verdict: 'ISSUES' }],
+  ['verdictSource none', 'no-verdict-source', { verdictSource: 'none' }],
+];
+
+for (const [name, slug, problemFields] of queryProblemCases) {
+  test(`queryLogs problems-only isolates ${name} from clean neighbors`, () => {
+    const root = makeRoot(`ccc-log-query-${slug}`);
+    const runId = `query-${slug}`;
+    const cleanFields = {
+      code: 0,
+      timedOut: false,
+      verdict: 'NO_BLOCKERS',
+      verdictSource: 'result',
+    };
+    const cleanBefore = event(runId, {
+      ...cleanFields,
+      ts: '2026-08-15T00:00:00.000Z',
+      fixture: 'clean-before',
+    });
+    const qualifying = event(runId, {
+      ...cleanFields,
+      ts: '2026-08-15T00:00:01.000Z',
+      fixture: `problem-${slug}`,
+      ...problemFields,
+    });
+    const cleanAfter = event(runId, {
+      ...cleanFields,
+      ts: '2026-08-15T00:00:02.000Z',
+      fixture: 'clean-after',
+    });
+    const runDirectory = writeRun(root, runId, [cleanBefore, qualifying, cleanAfter]);
+    try {
+      const rows = queryLogs({ runDirectory, problemsOnly: true, collapse: false });
+      assert.deepEqual(
+        rows.map((row) => row.event),
+        [qualifying],
+        `${name} must be the only row returned from its otherwise-clean stream`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('collapsing states the count and preserves exactly every collapsed record', () => {
   const records = [1, 2, 3].map((item) => ({
     ts: `2026-08-15T00:00:0${item}.000Z`, runId: 'collapse-run',
