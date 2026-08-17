@@ -6,13 +6,48 @@ import {
   DEFAULT_TOKEN_BUDGET,
   MAX_CONCURRENCY,
   MAX_ROUNDS,
-} from './campaign.js';
+} from './campaign-validation.js';
+import { loadCampaignFile } from './campaign-file.js';
 import { UNIT_KINDS } from './events.js';
 
 const EXECUTOR_EFFORTS = new Set([
   'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
 ]);
 const UNIT_KIND_SET = new Set(UNIT_KINDS);
+
+// This is the single source of truth for the batch flag surface and its precedence class.
+// parseArgs derives node:util's option table from it, so tests can enumerate the real flags
+// without maintaining a second list that can drift.
+export const BATCH_FLAG_DEFINITIONS = Object.freeze({
+  campaign: Object.freeze({ type: 'string', scope: 'selector' }),
+  task: Object.freeze({ type: 'string', multiple: true, scope: 'campaign' }),
+  target: Object.freeze({ type: 'string', scope: 'campaign' }),
+  gate: Object.freeze({ type: 'string', scope: 'campaign' }),
+  'gate-retries': Object.freeze({ type: 'string', scope: 'campaign' }),
+  'executor-model': Object.freeze({ type: 'string', scope: 'campaign' }),
+  'executor-effort': Object.freeze({ type: 'string', scope: 'campaign' }),
+  'verifier-model': Object.freeze({ type: 'string', scope: 'campaign' }),
+  concurrency: Object.freeze({ type: 'string', scope: 'campaign' }),
+  'token-budget': Object.freeze({ type: 'string', scope: 'campaign' }),
+  rounds: Object.freeze({ type: 'string', scope: 'campaign' }),
+  round: Object.freeze({ type: 'string', multiple: true, scope: 'campaign' }),
+  'unit-kind': Object.freeze({ type: 'string', multiple: true, scope: 'campaign' }),
+  'unit-id': Object.freeze({ type: 'string', multiple: true, scope: 'campaign' }),
+  perspective: Object.freeze({ type: 'string', multiple: true, scope: 'campaign' }),
+  'depends-on': Object.freeze({ type: 'string', multiple: true, scope: 'campaign' }),
+  quiet: Object.freeze({ type: 'boolean', scope: 'invocation' }),
+  'no-dashboard': Object.freeze({ type: 'boolean', scope: 'invocation' }),
+  open: Object.freeze({ type: 'boolean', scope: 'invocation' }),
+  port: Object.freeze({ type: 'string', scope: 'invocation' }),
+});
+
+export const BATCH_CAMPAIGN_FLAGS = Object.freeze(Object.keys(BATCH_FLAG_DEFINITIONS)
+  .filter((flag) => BATCH_FLAG_DEFINITIONS[flag].scope === 'campaign'));
+export const BATCH_INVOCATION_FLAGS = Object.freeze(Object.keys(BATCH_FLAG_DEFINITIONS)
+  .filter((flag) => BATCH_FLAG_DEFINITIONS[flag].scope === 'invocation'));
+
+const BATCH_PARSE_OPTIONS = Object.fromEntries(Object.entries(BATCH_FLAG_DEFINITIONS)
+  .map(([flag, { scope: _scope, ...definition }]) => [flag, definition]));
 
 function clampInt(v, def, lo, hi) {
   if (v === undefined) return def;
@@ -125,24 +160,14 @@ export function parseArgs(argv) {
   }
   const { values } = nodeParseArgs({
     args: argv.slice(1),
-    options: {
-      task: { type: 'string', ...(command === 'batch' ? { multiple: true } : {}) },
+    options: command === 'batch' ? BATCH_PARSE_OPTIONS : {
+      task: { type: 'string' },
       target: { type: 'string' },
       gate: { type: 'string' },
       'gate-retries': { type: 'string' },
       'executor-model': { type: 'string' },
       'executor-effort': { type: 'string' },
       'verifier-model': { type: 'string' },
-      ...(command === 'batch' ? {
-        concurrency: { type: 'string' },
-        'token-budget': { type: 'string' },
-        rounds: { type: 'string' },
-        round: { type: 'string', multiple: true },
-        'unit-kind': { type: 'string', multiple: true },
-        'unit-id': { type: 'string', multiple: true },
-        perspective: { type: 'string', multiple: true },
-        'depends-on': { type: 'string', multiple: true },
-      } : {}),
       quiet: { type: 'boolean' },
       'no-dashboard': { type: 'boolean' },
       open: { type: 'boolean' },
@@ -150,6 +175,20 @@ export function parseArgs(argv) {
     },
     strict: true,
   });
+  if (command === 'batch' && values.campaign !== undefined) {
+    const conflict = BATCH_CAMPAIGN_FLAGS.find((flag) => Object.hasOwn(values, flag));
+    if (conflict !== undefined) {
+      throw new Error(
+        `--${conflict} cannot be used with --campaign; declare campaign-shaping inputs in the file`,
+      );
+    }
+    const parsed = { command, ...loadCampaignFile(values.campaign) };
+    if (values.quiet) parsed.quiet = true;
+    if (values['no-dashboard']) parsed.noDashboard = true;
+    if (values.open) parsed.open = true;
+    if (values.port !== undefined) parsed.port = parseDashboardPort(values.port);
+    return parsed;
+  }
   for (const req of ['task', 'target', 'gate']) {
     if (!values[req]) throw new Error(`missing required option: --${req}`);
   }

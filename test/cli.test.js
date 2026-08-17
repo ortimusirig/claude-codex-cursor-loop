@@ -309,6 +309,39 @@ test('batch stdout is one aggregate JSON document while heartbeats remain on std
   }
 });
 
+test('batch --campaign executes the declared units with invocation-only flags', async () => {
+  const fixture = cliFixture();
+  const planA = join(fixture.root, 'campaign-a.md');
+  const planB = join(fixture.root, 'campaign-b.md');
+  const campaign = join(fixture.root, 'campaign.json');
+  writeFileSync(planA, 'Make no real change for declared unit A.\n');
+  writeFileSync(planB, 'Make no real change for declared unit B.\n');
+  writeFileSync(campaign, JSON.stringify({
+    target: 'target',
+    gate: 'gate.json',
+    gateRetries: 0,
+    concurrency: 2,
+    tokenBudget: 1000,
+    units: [
+      { id: 'declared-a', task: 'campaign-a.md', unitKind: 'node' },
+      { id: 'declared-b', task: 'campaign-b.md', unitKind: 'node', dependsOn: 'declared-a' },
+    ],
+  }));
+  try {
+    const result = await spawnCapture(process.execPath, [
+      cli, 'batch', '--campaign', campaign, '--no-dashboard', '--quiet',
+    ], { env: fixture.env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const aggregate = JSON.parse(result.stdout);
+    assert.deepEqual(aggregate.units.map((unit) => unit.unitId), ['declared-a', 'declared-b']);
+    assert.equal(aggregate.rollup.counts.completed, 2);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.scratchRoot, { recursive: true, force: true });
+  }
+});
+
 test('iterative batch CLI emits one grouped aggregate and ordered round boundaries', async () => {
   const fixture = cliFixture();
   const batchArgs = [
