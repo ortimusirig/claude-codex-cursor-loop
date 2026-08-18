@@ -379,7 +379,7 @@ test('scratch-root lists the newest run first', async () => {
   }
 });
 
-test('dashboard shows both labelled reviews, provenance, consistency, rationale, and VS Code command', async () => {
+test('dashboard shows both labelled reviews, provenance, consistency, rationale, and one VS Code link', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-verdict-'));
   const runId = 'run-verdict-source';
   const run = makeRun(root, runId, [
@@ -426,8 +426,10 @@ test('dashboard shows both labelled reviews, provenance, consistency, rationale,
     assert.match(html, /Correctness pass[\s\S]*Consistency: consistent/);
     assert.match(html, /Intent pass[\s\S]*Consistency: disagreement/);
     assert.match(html, /Executor rationale[\s\S]*Kept the local diff intact/);
-    assert.ok(html.includes(`code &quot;${run.work}&quot;`),
-      `VS Code command must use the actual worktree directory ${run.work}`);
+    assert.doesNotMatch(html, /data-copy-command|Copy command|class="copy-row"/,
+      'Detail must omit the retired copy-command box');
+    assert.equal((html.match(/>Open in VS Code<\/a>/g) ?? []).length, 1,
+      'Detail must render exactly one Open in VS Code link');
     const fallbackHref = `vscode://file/${encodeURIComponent(run.work)}`;
     assert.ok(html.includes(`href="${fallbackHref}">Open in VS Code</a>`),
       'a run without CHANGES.diff must link to its worktree directory');

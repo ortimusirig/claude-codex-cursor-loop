@@ -881,7 +881,6 @@ export function renderRunDetail(run) {
     }).join('')}</ul>`;
   const rationale = run.executorRationale
     ?? '(executor rationale is recorded when the run report completes)';
-  const vscodeCommand = `code "${run.worktreeDirectory.replaceAll('"', '\\"')}"`;
   const diffPath = join(run.worktreeDirectory, 'CHANGES.diff');
   let vscodeTarget = run.worktreeDirectory;
   try {
@@ -903,8 +902,6 @@ export function renderRunDetail(run) {
     + renderVerifier('Intent pass', run.verifiers.intent) + '</section>'
     + `<section><h3>Executor rationale</h3><pre class="prose">${escapeHtml(rationale)}</pre></section>`
     + '<section><h3>Open the worktree in VS Code</h3>'
-    + `<div class="copy-row"><pre class="command"><code>${escapeHtml(vscodeCommand)}</code></pre>`
-    + `<button type="button" data-copy-command="${escapeHtml(vscodeCommand)}">Copy command</button></div>`
     + `<p>${renderVsCodeLink(openInVsCodeHref)}</p></section>`
     + '<section><h3>Unified diff</h3>' + renderUnifiedDiff(run.diff, openInVsCodeHref) + '</section>'
     + '<section><h3>Token usage by seat</h3><dl class="tokens">'
@@ -996,7 +993,7 @@ function refreshAges(){document.querySelectorAll('[data-last-event-ts]').forEach
 function switchView(view){state.view=view;document.querySelectorAll('[data-view-panel]').forEach(function(panel){panel.hidden=panel.dataset.viewPanel!==view});document.querySelectorAll('[data-view]').forEach(function(button){button.setAttribute('aria-pressed',String(button.dataset.view===view))});if(view==='detail')refreshDetail()}
 async function refreshDetail(){const target=document.getElementById('detail-body');const select=document.getElementById('detail-pass');if(!target||!select||!select.value){if(target)target.innerHTML='<section class="empty">Select a pass to inspect its details.</section>';return}state.detailRunId=select.value;target.setAttribute('aria-busy','true');try{const response=await fetch('/detail?runId='+encodeURIComponent(state.detailRunId),{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That pass is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load pass detail: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy');refreshAges()}}
 function syncDetailOptions(){const select=document.getElementById('detail-pass');if(!select)return;const wanted=state.detailRunId;select.innerHTML=state.snapshot.runs.map(function(run){return'<option value="'+esc(run.runId)+'">'+esc(run.runId)+'</option>'}).join('');if(wanted&&state.snapshot.runs.some(function(run){return run.runId===wanted}))select.value=wanted;state.detailRunId=select.value||null}
-function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}const copyButton=event.target.closest('[data-copy-command]');if(copyButton&&navigator.clipboard){navigator.clipboard.writeText(copyButton.dataset.copyCommand).then(function(){copyButton.textContent='Copied'}).catch(function(){copyButton.textContent='Select and copy the command'})}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}})}
+function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}})}
 bind();
 const stream=new EventSource('/events');
 stream.addEventListener('snapshot',function(event){state.snapshot=JSON.parse(event.data).snapshot;renderSessions();syncDetailOptions();if(state.view==='detail')refreshDetail();connection.textContent='Live';refreshAges()});
@@ -1074,10 +1071,7 @@ h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 .verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}
 .verifier-findings{grid-column:1/-1;margin-top:.35rem}
 .verifier-findings h4{font-size:.75rem;margin:.15rem 0}
-.verifier-findings pre,.prose,.command{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.command{white-space:pre;overflow:auto;flex:1}
-.copy-row{display:flex;align-items:start;gap:.5rem}
-.copy-row button{margin-top:.2rem}
+.verifier-findings pre,.prose{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}
 .tokens dt{font-weight:650}
 .tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}
