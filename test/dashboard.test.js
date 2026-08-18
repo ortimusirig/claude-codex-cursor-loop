@@ -234,7 +234,7 @@ test('run titles are read from either TASK.md layout and rendered above the shor
     assert.equal(snapshot.runs.find((run) => run.runId === 'direct-task-run').title,
       'Direct task title');
     const html = renderSessionList(snapshot.runs, 2, false);
-    assert.match(html, /class="pass-identity"><b>Direct task title<\/b><small><code title="direct-task-run">direct-task-run<\/code>/);
+    assert.match(html, /class="pass-identity"><b title="Direct task title">Direct task title<\/b><small><code title="direct-task-run">direct-task-run<\/code>/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -757,14 +757,29 @@ function triageRun(runId, startTs, overrides = {}) {
 
 function displayTriageRun(runId, startTs, overrides = {}) {
   const run = triageRun(runId, startTs, overrides);
+  const displayVerdict = (review) => {
+    if (review === null) return { kind: 'pending', text: 'Pending — unknown' };
+    if (review.verdictSource === 'none') {
+      return { kind: 'unknown', text: 'No verdict — unknown (ISSUES is a fail-safe, not a finding)' };
+    }
+    if (review.verdict === 'ISSUES') {
+      return { kind: 'issues', text: 'ISSUES — reviewer found a problem' };
+    }
+    if (review.verdict === 'NO_BLOCKERS') return { kind: 'clean', text: 'NO_BLOCKERS — fine' };
+    return { kind: 'pending', text: `${review.verdict ?? 'Pending'} — unknown` };
+  };
   return {
     ...run,
     needsAttention: runNeedsAttention(run),
     filesChanged: [],
     triage: {
-      gate: { kind: run.gateResult === 'failed' ? 'issues' : 'clean', text: run.gateResult },
-      correctness: { kind: 'clean', text: run.verifiers.correctness.verdict },
-      intent: { kind: 'clean', text: run.verifiers.intent.verdict },
+      gate: run.gateResult === 'passed'
+        ? { kind: 'clean', text: 'Passed — fine' }
+        : run.gateResult === 'failed'
+          ? { kind: 'issues', text: 'Failed — needs attention' }
+          : { kind: 'pending', text: 'Pending — not complete' },
+      correctness: displayVerdict(run.verifiers.correctness),
+      intent: displayVerdict(run.verifiers.intent),
     },
   };
 }
@@ -817,6 +832,24 @@ function projectOpeningTag(html, projectPath) {
   return card.slice(0, card.indexOf('>') + 1);
 }
 
+function passRowHtml(html, runId) {
+  const serverMarker = `data-run-id="${runId}"`;
+  const clientMarker = `data-client-run-id="${runId}"`;
+  const markerIndex = Math.max(html.indexOf(serverMarker), html.indexOf(clientMarker));
+  assert.notEqual(markerIndex, -1, `expected a rendered row for ${runId}`);
+  const start = html.lastIndexOf('<tr', markerIndex);
+  const end = html.indexOf('</tr>', markerIndex);
+  assert.notEqual(start, -1, `expected an opening row tag for ${runId}`);
+  assert.notEqual(end, -1, `expected a closing row tag for ${runId}`);
+  return html.slice(start, end + '</tr>'.length);
+}
+
+function triageBadges(rowHtml) {
+  return [...rowHtml.matchAll(
+    /<span class="result ([^"]+)" data-result-kind="([^"]+)" title="([^"]+)">([^<]+)<\/span>/g,
+  )].map((match) => ({ classKind: match[1], dataKind: match[2], title: match[3], text: match[4] }));
+}
+
 test('session inference groups the just-under gap and splits the just-over gap', () => {
   const newest = triageRun('newest', '2026-08-15T04:00:00.000Z');
   const justUnder = triageRun('just-under', '2026-08-15T02:00:01.000Z');
@@ -846,7 +879,7 @@ test('session headers use the newest pass title and count other differing titles
   ];
   const sharedHtml = renderSessionList(shared, 2, false);
   assert.match(sharedHtml,
-    /<summary><span><b>Shared work<\/b><small>2026-08-15 00:00:00[.]000 UTC · 1h 0m<\/small>/);
+    /<summary><span><b title="Shared work">Shared work<\/b><small>2026-08-15 00:00:00[.]000 UTC · 1h 0m<\/small>/);
   assert.doesNotMatch(sharedHtml, /Shared work \+\d+ more/,
     'identical pass titles must not produce a mixed-session suffix');
 
@@ -855,8 +888,96 @@ test('session headers use the newest pass title and count other differing titles
     displayTriageRun('mixed-older', '2026-08-15T00:00:00.000Z', { title: 'Older task' }),
   ];
   const mixedHtml = renderSessionList(mixed, 2, false);
-  assert.match(mixedHtml, /<summary><span><b>Newest task \+1 more<\/b>/,
+  assert.match(mixedHtml, /<summary><span><b title="Newest task \+1 more">Newest task \+1 more<\/b>/,
     'one other run with a different non-null title must be counted');
+});
+
+test('full pass titles and computed session headlines are available on hover in both renderers', () => {
+  const longTitle = 'Explain the complete migration sequence and preserve every compatibility detail across all supported execution modes';
+  const olderTitle = 'A different session task';
+  const runs = [
+    displayTriageRun('long-title-newest', '2026-08-15T01:00:00.000Z', { title: longTitle }),
+    displayTriageRun('long-title-older', '2026-08-15T00:30:00.000Z', { title: olderTitle }),
+  ];
+  const headline = `${longTitle} +1 more`;
+  const renderings = [
+    ['server', renderSessionList(runs, 2, false)],
+    ['client', renderClientProjectList(runs, false).sessionHtml],
+  ];
+
+  for (const [name, html] of renderings) {
+    assert.ok(html.includes(`<summary><span><b title="${headline}">${headline}</b>`),
+      `${name}: the session tooltip must contain the full computed headline`);
+    assert.ok(passRowHtml(html, 'long-title-newest')
+      .includes(`<b title="${longTitle}">${longTitle}</b>`),
+    `${name}: the pass tooltip must contain the full exact stored title`);
+  }
+});
+
+test('every triage state has a type-specific plain-language hover explanation in both renderers', () => {
+  const reviewStates = [
+    { runId: 'review-pending', kind: 'pending', text: 'Pending — unknown' },
+    {
+      runId: 'review-no-result',
+      kind: 'unknown',
+      text: 'No verdict — unknown (ISSUES is a fail-safe, not a finding)',
+    },
+    { runId: 'review-issues', kind: 'issues', text: 'ISSUES — reviewer found a problem' },
+    { runId: 'review-clean', kind: 'clean', text: 'NO_BLOCKERS — fine' },
+    { runId: 'review-fallback', kind: 'pending', text: 'UNRECOGNIZED — unknown' },
+  ];
+  const gateStates = [
+    { kind: 'clean', text: 'Passed — fine' },
+    { kind: 'issues', text: 'Failed — needs attention' },
+    { kind: 'pending', text: 'Pending — not complete' },
+  ];
+  const runs = reviewStates.map((review, index) => ({
+    ...displayTriageRun(review.runId, `2026-08-15T00:${String(index).padStart(2, '0')}:00.000Z`),
+    triage: {
+      gate: gateStates[index] ?? gateStates[0],
+      correctness: { kind: review.kind, text: review.text },
+      intent: { kind: review.kind, text: review.text },
+    },
+  }));
+  const renderings = [
+    ['server', renderSessionList(runs, 2, false)],
+    ['client', renderClientProjectList(runs, false).sessionHtml],
+  ];
+
+  for (const [name, html] of renderings) {
+    gateStates.forEach((expected, index) => {
+      const [gate] = triageBadges(passRowHtml(html, reviewStates[index].runId));
+      assert.deepEqual({ kind: gate.dataKind, text: gate.text }, expected,
+        `${name}: gate badge ${index + 1} must keep its existing kind and text`);
+      assert.ok(gate.title.length > 0, `${name}: gate state ${expected.text} needs an explanation`);
+    });
+
+    for (const review of reviewStates) {
+      const badges = triageBadges(passRowHtml(html, review.runId));
+      assert.equal(badges.length, 3, `${name}: ${review.runId} must render all three triage badges`);
+      const correctness = badges[1];
+      const intent = badges[2];
+      for (const [checkType, badge] of [['correctness', correctness], ['intent', intent]]) {
+        assert.equal(badge.classKind, review.kind,
+          `${name}: ${checkType} ${review.text} must keep its color classification`);
+        assert.equal(badge.dataKind, review.kind,
+          `${name}: ${checkType} ${review.text} must keep its data classification`);
+        assert.equal(badge.text, review.text,
+          `${name}: ${checkType} ${review.text} must keep its visible text`);
+        assert.ok(badge.title.length > 0,
+          `${name}: ${checkType} ${review.text} needs an explanation`);
+      }
+      assert.notEqual(correctness.title, intent.title,
+        `${name}: correctness and intent must explain ${review.text} differently`);
+    }
+
+    assert.ok(triageBadges(passRowHtml(html, 'review-issues'))[1].title
+      .includes('found a possible defect in the code'),
+    `${name}: the correctness explanation must describe what the review found`);
+    assert.ok(triageBadges(passRowHtml(html, 'review-no-result'))[0].title
+      .includes('automated checks failed'),
+    `${name}: the failed-gate explanation must describe the failure`);
+  }
 });
 
 test('project grouping wraps multiple full paths and auto-collapses exactly one project', () => {
@@ -1107,16 +1228,7 @@ test('session rows count all and attention-needing passes independently', () => 
   const [session] = inferSessions(runs, 2);
   assert.equal(session.passCount, 3);
   assert.equal(session.attentionCount, 2);
-  const displayRuns = runs.map((run) => ({
-    ...run,
-    needsAttention: runNeedsAttention(run),
-    filesChanged: [],
-    triage: {
-      gate: { kind: run.gateResult === 'failed' ? 'issues' : 'clean', text: run.gateResult },
-      correctness: { kind: 'clean', text: run.verifiers.correctness.verdict },
-      intent: { kind: 'clean', text: run.verifiers.intent.verdict },
-    },
-  }));
+  const displayRuns = runs.map((run) => displayTriageRun(run.runId, run.startTs, run));
   const html = renderSessionList(displayRuns, 2, false);
   assert.match(html, />3 passes</);
   assert.match(html, />2 need attention</,
