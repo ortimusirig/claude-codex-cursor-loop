@@ -19,7 +19,7 @@ import { CLI_COMMANDS } from '../src/cli-help.js';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const installerPath = fileURLToPath(new URL('../install.mjs', import.meta.url));
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
-const skillPath = fileURLToPath(new URL('../SKILL.md', import.meta.url));
+const skillPath = fileURLToPath(new URL('../skills/c-cube-loop/SKILL.md', import.meta.url));
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url));
 const currentName = 'c-cube-loop';
 const previousName = ['claude', 'codex', 'cursor', 'loop'].join('-');
@@ -83,8 +83,8 @@ test('package and skill identifiers are c-cube-loop and shipped text has no stal
   assert.notEqual(skill.name, previousName);
 
   const shippableTextRoots = [
-    'package.json', 'SKILL.md', 'README.md', 'PORTING.md', 'diag.mjs', 'bin', 'src',
-    'fixtures', 'test', 'docs', 'cursor-plugin',
+    'package.json', 'README.md', 'PORTING.md', 'diag.mjs', 'bin', 'src',
+    'fixtures', 'test', 'docs', 'cursor-plugin', 'commands', 'skills', '.claude-plugin',
   ];
   if (existsSync(installerPath)) shippableTextRoots.push('install.mjs');
   const checked = shippableTextRoots
@@ -122,7 +122,7 @@ test('SKILL.md description covers campaigns and diagnostics', () => {
   assert.match(description, /diagnostic|doctor/i);
 });
 
-test('installer defaults to c-cube-loop and --name overrides the install directory', () => {
+test('installer defaults to plugin verification and personal-skill mode is explicit', () => {
   if (!existsSync(installerPath)) {
     assert.ok(existsSync(packagePath), 'installed-copy self-test must still run from the payload');
     return;
@@ -131,15 +131,49 @@ test('installer defaults to c-cube-loop and --name overrides the install directo
   try {
     const defaultRun = runInstaller(home);
     assert.equal(defaultRun.status, 0, output(defaultRun));
-    const defaultTarget = targetFrom(defaultRun);
+    assert.match(output(defaultRun), /MODE=plugin-verifier/);
+    assert.match(output(defaultRun), /PLUGIN_STATUS=PREPARED mode=plugin/);
+    assert.doesNotMatch(output(defaultRun), /^target:/m,
+      'plugin verification must not pretend to choose an install destination');
+
+    const personalRun = runInstaller(home, '--personal-skill');
+    assert.equal(personalRun.status, 0, output(personalRun));
+    assert.match(output(personalRun), /MODE=personal-skill/);
+    const defaultTarget = targetFrom(personalRun);
     assert.equal(basename(defaultTarget), currentName);
     assert.equal(dirname(defaultTarget), normalize(join(home, '.claude', 'skills')));
 
-    const customRun = runInstaller(home, '--name', 'side-by-side-name');
+    const customRun = runInstaller(home, '--personal-skill', '--name', 'side-by-side-name');
     assert.equal(customRun.status, 0, output(customRun));
     const customTarget = targetFrom(customRun);
     assert.equal(basename(customTarget), 'side-by-side-name');
     assert.notEqual(customTarget, defaultTarget, '--name must override rather than retain the default');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('installer warns about the current personal skill without deleting it and is silent otherwise', () => {
+  if (!existsSync(installerPath)) {
+    assert.ok(existsSync(packagePath), 'installed-copy self-test must still run from the payload');
+    return;
+  }
+  const home = mkdtempSync(join(tmpdir(), 'ccc-installer-duplicate-'));
+  const personalPath = normalize(join(home, '.claude', 'skills', currentName));
+  try {
+    const absent = runInstaller(home);
+    assert.equal(absent.status, 0, output(absent));
+    assert.doesNotMatch(output(absent), /WARNING: personal skill install detected:/,
+      'the warning must stay silent when the personal directory is absent');
+
+    mkdirSync(personalPath, { recursive: true });
+    const present = runInstaller(home);
+    assert.equal(present.status, 0, output(present));
+    assert.match(output(present), /WARNING: personal skill install detected:/);
+    assert.ok(output(present).includes(personalPath), 'the warning must name the personal directory');
+    assert.ok(output(present).includes(expectedRemovalCommand(personalPath)),
+      'the warning must print the exact platform removal command');
+    assert.ok(existsSync(personalPath), 'the installer must not remove the personal skill');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

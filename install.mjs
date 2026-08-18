@@ -1,34 +1,71 @@
 #!/usr/bin/env node
-// Portable installer for the c-cube-loop skill.
-// Cross-platform, zero dependencies, no PowerShell or bash required.
+// Verifier and instruction printer for the c-cube-loop Claude Code plugin.
+// Cross-platform, zero dependencies, and deliberately hands Claude Code ownership
+// of its marketplace, plugin, and settings state.
 //
-//   node install.mjs            install to ~/.claude/skills/c-cube-loop
-//   node install.mjs --name X   install under a different skill name
-//   node install.mjs --dry-run  show what would happen, change nothing
-//
-// Copies the package, verifies every file by SHA-256, then runs the self-test
-// from the INSTALLED location (the installed copy is what actually runs).
+//   node install.mjs                    verify and print plugin install commands
+//   node install.mjs --dry-run          verify and preview without the self-test
+//   node install.mjs --personal-skill   explicitly install the legacy personal skill
+//   node install.mjs --personal-skill --name X
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CLI_COMMANDS, CLI_USAGE } from './src/cli-help.js';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
-// Docs and diag.mjs ride along: install wipes the destination first, so anything
-// absent here is DELETED from an existing install. diag.mjs is a runtime tool, and
-// README.md is the CLI reference — both belong where the skill is actually invoked.
-// The missing-source guard below checks only entries that are listed here; it cannot
-// detect an existing top-level entry silently omitted from this array.
-const PAYLOAD = ['package.json', 'SKILL.md', 'README.md', 'LICENSE', 'PORTING.md', 'diag.mjs', 'bin', 'src', 'fixtures', 'test', 'docs', 'cursor-plugin'];
+const META_DIRECTORY = join(SRC, '.claude-plugin');
+const PLUGIN_MANIFEST = join(META_DIRECTORY, 'plugin.json');
+const MARKETPLACE_MANIFEST = join(META_DIRECTORY, 'marketplace.json');
+const PLUGIN_SKILL = join(SRC, 'skills', 'c-cube-loop', 'SKILL.md');
+
+// The opt-in personal-skill mode preserves the old self-contained installation.
+// The source skill is additionally mapped to SKILL.md at the destination root.
+// Plugin metadata is intentionally absent there so the result stays a standalone skill.
+const PAYLOAD = [
+  'package.json', 'README.md', 'LICENSE', 'PORTING.md', 'diag.mjs', 'bin', 'src',
+  'fixtures', 'test', 'docs', 'cursor-plugin', 'commands', 'skills',
+];
 
 const args = process.argv.slice(2);
-const dryRun = args.includes('--dry-run');
-const nameIdx = args.indexOf('--name');
-const skillName = nameIdx >= 0 ? args[nameIdx + 1] : 'c-cube-loop';
+let dryRun = false;
+let personalSkill = false;
+let skillName = 'c-cube-loop';
+let nameSupplied = false;
+for (let index = 0; index < args.length; index++) {
+  const arg = args[index];
+  if (arg === '--dry-run') dryRun = true;
+  else if (arg === '--personal-skill') personalSkill = true;
+  else if (arg === '--name') {
+    const value = args[++index];
+    if (!value || value.startsWith('--')) {
+      console.error('FAIL: --name requires a skill name');
+      process.exit(1);
+    }
+    skillName = value;
+    nameSupplied = true;
+  } else {
+    console.error(`FAIL: unknown argument: ${arg}`);
+    process.exit(1);
+  }
+}
+if (nameSupplied && !personalSkill) {
+  console.error('FAIL: --name is only valid with --personal-skill');
+  process.exit(1);
+}
+
 const skillsDirectory = join(homedir(), '.claude', 'skills');
+const currentPersonalDest = join(skillsDirectory, 'c-cube-loop');
 const dest = join(skillsDirectory, skillName);
 // Keep the superseded name constructible for upgrade detection without retaining it as
 // this package's identifier in source metadata or documentation.
@@ -50,7 +87,15 @@ function walk(dir, base = dir, out = []) {
   return out;
 }
 
-const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+
+function isPayloadFile(item, child) {
+  // Run-journal tests and real executions create timestamped notes here. They are
+  // runtime output, not package input, and may disappear while a concurrent test
+  // process is validating the payload. Keep only the checked-in directory guide.
+  if (item === 'docs' && child.startsWith('runs/')) return child === 'runs/README.md';
+  return true;
+}
 
 function removalCommand(path) {
   if (process.platform === 'win32') {
@@ -59,72 +104,275 @@ function removalCommand(path) {
   return `rm -rf -- '${path.replaceAll("'", "'\\''")}'`;
 }
 
-console.log(`source: ${SRC}`);
-console.log(`target: ${dest}`);
-if (existsSync(previousDest)) {
-  console.warn(`WARNING: previous skill install detected: ${previousDest}`);
-  console.warn('That directory is now superseded by c-cube-loop and would leave the host with two equivalent skills.');
-  console.warn('After checking the path, remove the previous install manually with exactly:');
-  console.warn(`  ${removalCommand(previousDest)}`);
+function warnAboutSkillDirectory(path, explanation, detail) {
+  if (!existsSync(path)) return;
+  console.warn(`WARNING: ${explanation}: ${path}`);
+  console.warn(detail);
+  console.warn('After checking the path, remove it manually with exactly:');
+  console.warn(`  ${removalCommand(path)}`);
 }
-if (dryRun) {
-  console.log('\n--dry-run: nothing was written. Payload that would be installed:');
-  for (const item of PAYLOAD) console.log(`  ${item}${existsSync(join(SRC, item)) ? '' : '  (MISSING)'}`);
+
+function readJson(path, label) {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('top level must be an object');
+    }
+    return value;
+  } catch (error) {
+    throw new Error(`${label} is malformed at ${path}: ${error.message}`);
+  }
+}
+
+function frontmatter(path) {
+  const document = readFileSync(path, 'utf8');
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(document);
+  if (!match) throw new Error(`missing or malformed YAML front matter: ${path}`);
+  const fields = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const separator = line.indexOf(':');
+    if (separator < 1) throw new Error(`malformed front matter line in ${path}: ${line}`);
+    fields[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+  }
+  return fields;
+}
+
+function commandDescription(command) {
+  const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`^  ${escaped}\\s{2,}(.+)$`, 'm').exec(CLI_USAGE);
+  if (!match) throw new Error(`CLI_USAGE has no Commands entry for ${command}`);
+  return match[1].trim();
+}
+
+function validatePlugin() {
+  for (const [path, label] of [
+    [PLUGIN_MANIFEST, 'plugin manifest'],
+    [MARKETPLACE_MANIFEST, 'marketplace manifest'],
+    [join(SRC, 'package.json'), 'package manifest'],
+  ]) {
+    if (!existsSync(path)) throw new Error(`${label} is missing: ${path}`);
+  }
+
+  const plugin = readJson(PLUGIN_MANIFEST, 'plugin manifest');
+  const marketplace = readJson(MARKETPLACE_MANIFEST, 'marketplace manifest');
+  const pkg = readJson(join(SRC, 'package.json'), 'package manifest');
+
+  if (plugin.name !== 'c-cube-loop') throw new Error('plugin.json name must be c-cube-loop');
+  if (plugin.name !== pkg.name) throw new Error('plugin.json and package.json names disagree');
+  if (plugin.version !== pkg.version) throw new Error('plugin.json and package.json versions disagree');
+  if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) {
+    throw new Error('plugin.json version must be semantic MAJOR.MINOR.PATCH');
+  }
+  if (typeof plugin.description !== 'string' || !plugin.description.trim()) {
+    throw new Error('plugin.json description must be non-empty');
+  }
+  for (const field of ['dependencies', 'devDependencies']) {
+    if (pkg[field] && Object.keys(pkg[field]).length > 0) {
+      throw new Error(`package.json ${field} must stay empty`);
+    }
+  }
+
+  if (typeof marketplace.name !== 'string' || !marketplace.name.trim()) {
+    throw new Error('marketplace.json name must be non-empty');
+  }
+  if (!marketplace.owner || typeof marketplace.owner.name !== 'string' || !marketplace.owner.name.trim()) {
+    throw new Error('marketplace.json owner.name must be non-empty');
+  }
+  if (!Array.isArray(marketplace.plugins) || marketplace.plugins.length !== 1) {
+    throw new Error('marketplace.json must contain exactly one plugin entry');
+  }
+  const entry = marketplace.plugins[0];
+  if (entry.name !== plugin.name || entry.source !== './') {
+    throw new Error('marketplace plugin must be named c-cube-loop with source "./"');
+  }
+
+  for (const component of ['commands', 'skills']) {
+    const rootComponent = join(SRC, component);
+    if (!existsSync(rootComponent) || !statSync(rootComponent).isDirectory()) {
+      throw new Error(`${component}/ must exist at the plugin root`);
+    }
+    if (existsSync(join(META_DIRECTORY, component))) {
+      throw new Error(`${component}/ must not be nested inside .claude-plugin/`);
+    }
+  }
+  if (existsSync(join(SRC, 'SKILL.md'))) {
+    throw new Error('the plugin skill must be moved to skills/c-cube-loop/SKILL.md');
+  }
+  if (!existsSync(PLUGIN_SKILL)) throw new Error(`plugin skill is missing: ${PLUGIN_SKILL}`);
+  if (frontmatter(PLUGIN_SKILL).name !== plugin.name) {
+    throw new Error('the plugin skill name must match plugin.json');
+  }
+
+  const commandDirectory = join(SRC, 'commands');
+  const entries = readdirSync(commandDirectory, { withFileTypes: true });
+  const actualCommands = entries
+    .filter((entryValue) => entryValue.isFile() && entryValue.name.endsWith('.md'))
+    .map((entryValue) => entryValue.name.slice(0, -3))
+    .sort();
+  const unexpectedEntries = entries
+    .filter((entryValue) => !entryValue.isFile() || !entryValue.name.endsWith('.md'))
+    .map((entryValue) => entryValue.name);
+  if (unexpectedEntries.length > 0) {
+    throw new Error(`commands/ contains unsupported entries: ${unexpectedEntries.join(', ')}`);
+  }
+  const missing = CLI_COMMANDS.filter((command) => !actualCommands.includes(command));
+  const extra = actualCommands.filter((command) => !CLI_COMMANDS.includes(command));
+  if (missing.length || extra.length) {
+    throw new Error(`command files disagree with CLI_COMMANDS (missing: ${missing.join(', ') || 'none'}; extra: ${extra.join(', ') || 'none'})`);
+  }
+  for (const command of CLI_COMMANDS) {
+    const fields = frontmatter(join(commandDirectory, `${command}.md`));
+    if (fields.description !== commandDescription(command)) {
+      throw new Error(`${command}.md description must match its CLI_USAGE Commands line`);
+    }
+    if (fields['disable-model-invocation'] !== 'true') {
+      throw new Error(`${command}.md must set disable-model-invocation: true`);
+    }
+  }
+
+  return { plugin, marketplace };
+}
+
+function payloadFiles() {
+  const files = [];
+  for (const item of PAYLOAD) {
+    const source = join(SRC, item);
+    if (!existsSync(source)) throw new Error(`payload item missing from source: ${item}`);
+    if (statSync(source).isDirectory()) {
+      for (const child of walk(source)) {
+        if (isPayloadFile(item, child)) {
+          files.push([join(source, child), join(dest, item, child)]);
+        }
+      }
+    } else {
+      files.push([source, join(dest, item)]);
+    }
+  }
+  files.push([PLUGIN_SKILL, join(dest, 'SKILL.md')]);
+  return files;
+}
+
+function runSelfTest(cwd) {
+  const result = spawnSync(process.execPath, ['--test'], { cwd, encoding: 'utf8' });
+  const output = `${result.stdout}${result.stderr}`;
+  const pass = /^# pass (\d+)/m.exec(output)?.[1] ?? /pass (\d+)/.exec(output)?.[1] ?? '?';
+  const fail = /^# fail (\d+)/m.exec(output)?.[1] ?? /fail (\d+)/.exec(output)?.[1] ?? '?';
+  if (result.status !== 0) {
+    throw new Error(`self-test failed from ${cwd} (pass=${pass} fail=${fail})`);
+  }
+  console.log(`self-test: PASS (${pass} tests)`);
+}
+
+function reportCliAvailability() {
+  const probe = process.platform === 'win32' ? 'where' : 'which';
+  for (const bin of ['git', 'codex', 'agent', 'gh']) {
+    const result = spawnSync(probe, [bin], { encoding: 'utf8' });
+    const missing = bin === 'gh'
+      ? 'NOT FOUND (needed only for explicit publish)'
+      : 'NOT FOUND (needed at run time)';
+    console.log(`${bin}: ${result.status === 0 ? 'found (presence only)' : missing}`);
+  }
+}
+
+function printPluginInstructions(marketplaceName) {
+  const escapedSource = SRC.replaceAll('"', '\\"');
+  console.log('\nRun these exact commands inside Claude Code:');
+  console.log(`  /plugin marketplace add "${escapedSource}"`);
+  console.log(`  /plugin install c-cube-loop@${marketplaceName}`);
+}
+
+let manifests;
+let copies;
+try {
+  manifests = validatePlugin();
+  copies = payloadFiles();
+  for (const [source] of copies) sha(source);
+} catch (error) {
+  console.error(`FAIL: ${error.message}`);
+  process.exit(1);
+}
+
+console.log(`MODE=${personalSkill ? 'personal-skill' : 'plugin-verifier'}`);
+console.log(`source: ${SRC}`);
+console.log(`plugin validation: PASS (${CLI_COMMANDS.length} commands, 1 skill)`);
+
+warnAboutSkillDirectory(
+  currentPersonalDest,
+  'personal skill install detected',
+  'That directory duplicates the c-cube-loop skill provided by this plugin.',
+);
+warnAboutSkillDirectory(
+  previousDest,
+  'previous skill install detected',
+  'That directory is now superseded by c-cube-loop and would leave the host with two equivalent skills.',
+);
+if (personalSkill && dest !== currentPersonalDest && dest !== previousDest) {
+  warnAboutSkillDirectory(
+    dest,
+    'requested personal skill target already exists',
+    'That directory would be overwritten by this personal-skill request.',
+  );
+}
+
+if (!personalSkill) {
+  console.log(`payload: ${copies.length} source files readable by SHA-256`);
+  if (!dryRun) {
+    try {
+      runSelfTest(SRC);
+    } catch (error) {
+      console.error(`FAIL: ${error.message}`);
+      process.exit(1);
+    }
+    reportCliAvailability();
+  } else {
+    console.log('--dry-run: no files were written and the self-test was not run.');
+  }
+  printPluginInstructions(manifests.marketplace.name);
+  console.log(`PLUGIN_STATUS=PREPARED mode=plugin${dryRun ? ' dry-run=true' : ''}`);
   process.exit(0);
 }
 
-for (const item of PAYLOAD) {
-  if (!existsSync(join(SRC, item))) {
-    console.error(`FAIL: payload item missing from source: ${item}`);
-    process.exit(1);
-  }
+console.log(`target: ${dest}`);
+if (dryRun) {
+  console.log('\n--dry-run: nothing was written. Personal-skill payload that would be installed:');
+  for (const item of PAYLOAD) console.log(`  ${item}`);
+  console.log('  skills/c-cube-loop/SKILL.md -> SKILL.md');
+  console.log('SKILL_STATUS=PREPARED mode=personal-skill dry-run=true');
+  process.exit(0);
 }
 
-rmSync(dest, { recursive: true, force: true });
-mkdirSync(dest, { recursive: true });
-for (const item of PAYLOAD) cpSync(join(SRC, item), join(dest, item), { recursive: true });
-
-// Verify: every installed file must byte-match its source.
-let checked = 0;
-for (const item of PAYLOAD) {
-  const from = join(SRC, item);
-  const files = statSync(from).isDirectory() ? walk(from).map((r) => [join(from, r), join(dest, item, r)]) : [[from, join(dest, item)]];
-  for (const [a, b] of files) {
-    if (sha(a) !== sha(b)) {
-      console.error(`FAIL: hash mismatch after copy: ${b}`);
-      process.exit(1);
-    }
-    checked++;
-  }
-}
-console.log(`verified: ${checked} files match by SHA-256`);
-
-// Self-test from the installed location.
-const t = spawnSync(process.execPath, ['--test'], { cwd: dest, encoding: 'utf8' });
-const out = `${t.stdout}${t.stderr}`;
-const pass = /^# pass (\d+)/m.exec(out)?.[1] ?? /pass (\d+)/.exec(out)?.[1] ?? '?';
-const fail = /^# fail (\d+)/m.exec(out)?.[1] ?? /fail (\d+)/.exec(out)?.[1] ?? '?';
-if (t.status !== 0) {
-  console.error(`FAIL: self-test failed from the installed location (pass=${pass} fail=${fail})`);
+if (existsSync(dest)) {
+  console.error(`FAIL: refusing to overwrite or delete existing personal skill directory: ${dest}`);
+  console.error(`Remove it yourself if intended: ${removalCommand(dest)}`);
   process.exit(1);
 }
-console.log(`self-test: PASS (${pass} tests)`);
 
-// Report vendor CLI availability (informational presence only — doctor exercises them).
-const probe = process.platform === 'win32' ? 'where' : 'which';
-for (const bin of ['git', 'codex', 'agent', 'gh']) {
-  const r = spawnSync(probe, [bin], { encoding: 'utf8' });
-  const missing = bin === 'gh'
-    ? 'NOT FOUND (needed only for explicit publish)'
-    : 'NOT FOUND (needed at run time)';
-  console.log(`${bin}: ${r.status === 0 ? 'found (presence only)' : missing}`);
+try {
+  mkdirSync(dest, { recursive: true });
+  for (const [source, installed] of copies) {
+    mkdirSync(dirname(installed), { recursive: true });
+    cpSync(source, installed);
+  }
+
+  let checked = 0;
+  for (const [source, installed] of copies) {
+    if (sha(source) !== sha(installed)) throw new Error(`hash mismatch after copy: ${installed}`);
+    checked++;
+  }
+  console.log(`verified: ${checked} files match by SHA-256`);
+  runSelfTest(dest);
+} catch (error) {
+  console.error(`FAIL: ${error.message}`);
+  console.error(`A partial directory may remain at ${dest}; inspect it and remove it manually if needed.`);
+  process.exit(1);
 }
 
+reportCliAvailability();
 const scratch = process.env.CCC_SCRATCH_ROOT ?? (process.platform === 'win32' ? 'C:/ccc/w' : '~/.ccc/w');
-console.log(`\nSKILL_STATUS=INSTALLED name=${skillName}`);
 console.log(`scratch root: ${scratch}  (override with CCC_SCRATCH_ROOT)`);
 console.log('\nNext:');
 console.log(`  node "${join(dest, 'bin', 'loop.js')}" doctor`);
 console.log(`  node "${join(dest, 'bin', 'loop.js')}" init <a-folder>`);
 console.log(`  node "${join(dest, 'bin', 'loop.js')}" run --task <plan> --target <folder> --gate <gate.json>`);
 console.log('Add --deep to doctor when you want the token-using Codex write and Cursor read probes.');
+console.log(`SKILL_STATUS=INSTALLED mode=personal-skill name=${skillName}`);

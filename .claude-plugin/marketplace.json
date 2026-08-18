@@ -1,0 +1,13 @@
+{
+  "name": "c-cube-loop",
+  "owner": {
+    "name": "Sumitro Giri"
+  },
+  "plugins": [
+    {
+      "name": "c-cube-loop",
+      "source": "./",
+      "description": "Plan and supervise isolated Codex implementation, true-exit-code gates, Cursor review, and multi-plan campaigns."
+    }
+  ]
+}

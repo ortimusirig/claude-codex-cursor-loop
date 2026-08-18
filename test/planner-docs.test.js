@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { CAMPAIGN_SHAPES } from '../src/campaign.js';
 import { CLI_COMMANDS, CLI_USAGE } from '../src/cli-help.js';
 
-const skillPath = fileURLToPath(new URL('../SKILL.md', import.meta.url));
+const skillPath = fileURLToPath(new URL('../skills/c-cube-loop/SKILL.md', import.meta.url));
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url));
 const skill = readFileSync(skillPath, 'utf8');
 const readme = readFileSync(readmePath, 'utf8');

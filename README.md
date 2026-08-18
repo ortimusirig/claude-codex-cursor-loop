@@ -14,8 +14,8 @@ node bin/loop.js run --task ../ccc-loop-demo/plan.md --target ../ccc-loop-demo -
 ```
 
 > The repository at <https://github.com/ortimusirig/claude-codex-cursor-loop> keeps its
-> original name; the skill it installs is `c-cube-loop`. The clone command above checks it
-> out into a `c-cube-loop` folder so the two agree locally.
+> original name; the Claude Code plugin and its slash-command namespace are `c-cube-loop`.
+> The clone command above checks it out into a matching local folder.
 
 ## What you need
 
@@ -84,19 +84,57 @@ POSIX `which`, plain `spawn` — but treat the first Unix run as verification.
 
 ## Install
 
-```
+```sh
 node install.mjs
 ```
 
-Copies the payload to `~/.claude/skills/c-cube-loop`, verifies **every file
-by SHA-256**, runs the test suite **from the installed location**, and reports whether `git`,
-`codex`, `agent`, and the optional `gh` publisher are on PATH. Those installer lines report
-presence only. Run `doctor --deep` to prove that Codex can write and Cursor can read. Non-zero
-installer exit means it did not install cleanly. If the superseded skill directory is still
-present, the installer names it and prints the exact removal command without deleting it.
+This is a verifier, not a plugin installer. It validates `.claude-plugin/plugin.json`, the local
+marketplace catalog, the command and skill layout, and the payload; runs the full self-test from
+this checkout; reports CLI availability; and finishes with `PLUGIN_STATUS=PREPARED`. It never
+writes `known_marketplaces.json`, `installed_plugins.json`, or any Claude Code `settings.json`.
+Claude Code owns that state.
 
-Options: `--dry-run` (preview, writes nothing), `--name <x>` (install under a different name
-to run side-by-side with an existing copy).
+Paste the two commands it prints into Claude Code. The first contains this clone's absolute path:
+
+```text
+/plugin marketplace add "<absolute-path-to-this-clone>"
+/plugin install c-cube-loop@c-cube-loop
+```
+
+If `~/.claude/skills/c-cube-loop` already exists, the verifier warns that the plugin and personal
+skill would duplicate one another, names the path, and prints the exact platform removal command.
+It does the same for the superseded identifier. It never removes either directory.
+
+The old standalone personal-skill installation remains available only by explicit request:
+
+```sh
+node install.mjs --personal-skill
+```
+
+That mode says `MODE=personal-skill`, copies into `~/.claude/skills/c-cube-loop`, verifies every
+copied file by SHA-256, and runs the self-test from the copied location. It refuses to overwrite
+or delete an existing directory. Add `--name <x>` only with `--personal-skill` for a different
+destination. `--dry-run` validates and previews either mode without writing or running the
+self-test.
+
+After plugin installation, these are the eight namespaced slash commands:
+
+```text
+/c-cube-loop:run
+/c-cube-loop:batch
+/c-cube-loop:status
+/c-cube-loop:dashboard
+/c-cube-loop:publish
+/c-cube-loop:doctor
+/c-cube-loop:init
+/c-cube-loop:help
+```
+
+Each is a prompt to the Claude Code controller, not a shell alias. It asks the controller to run
+the corresponding real CLI command with the supplied arguments and report the child process's
+true exit code. The controller must not infer success from stdout or read an exit status through
+a pipe. The `run` and `batch` prompts explicitly load the governing skill law and require a
+usable plan before spending tokens.
 
 ## Usage
 
@@ -109,8 +147,10 @@ node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--por
 node bin/loop.js publish <completed-run-directory>
 node bin/loop.js doctor [--deep] [--scratch-root <directory>] [--repository <directory>]
 node bin/loop.js init <directory>
-node bin/loop.js --help
+node bin/loop.js help
 ```
+
+`--help` and `-h` remain aliases for `help`.
 
 `init` never overwrites `plan.md` or `gate.json`. It detects a `package.json` test script;
 otherwise it emits a valid, runnable placeholder gate with an explicit comment telling you to
