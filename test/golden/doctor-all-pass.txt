@@ -1,0 +1,24 @@
+ccc doctor
+
+Required checks:
+PASS [required] Node version: 24.9.0 meets >=24
+PASS [required] git usable: git version 2.99.0-doctor-stub
+PASS [required] Codex CLI installed: {{CODEX_BIN}} was found; write ability is reported separately
+PASS [required] Codex signed in: `codex login status` exited 0
+PASS [required] Cursor agent installed: {{AGENT_BIN}} was found; read ability is reported separately
+PASS [required] Cursor signed in: `agent status` exited 0
+PASS [required] Scratch root location: {{SCRATCH_ROOT}} is outside AppData and OneDrive
+PASS [required] Scratch root writable: {{SCRATCH_ROOT}} accepted a disposable write
+PASS [required] Codex write probe: created ccc-doctor-write.txt with the requested content in a disposable Git repository
+PASS [required] Cursor read probe: returned the unpredictable contents of a scratch file and left the directory unchanged
+
+Optional features (these do not affect loop health):
+INFO [optional] GitHub publishing: optional; the loop is fully usable without it.
+PASS [optional] GitHub CLI installed: {{GH_BIN}} was found
+PASS [optional] GitHub authentication: `gh auth status` exited 0
+PASS [optional] GitHub remote: {{REPOSITORY}} has a github.com remote
+PASS [optional] Logdy event viewer: {{LOGDY_BIN}} was found
+INFO [optional] Offline run journal: available through `node bin/generate-run-journal.js --help`; no external integration is required.
+
+Loop health: HEALTHY (all required checks, including the write/read probes, passed).
+GitHub publishing and Logdy are optional; the loop is fully usable without them.

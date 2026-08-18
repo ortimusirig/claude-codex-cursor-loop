@@ -1,0 +1,36 @@
+ccc doctor
+
+Required checks:
+FAIL [required] Node version: 23.1.2 does not meet >=24
+  Next: `node --version`; install Node.js 24 or newer from https://nodejs.org/ and rerun doctor.
+FAIL [required] git usable: ccc-doctor-golden-missing-git-7e57 was not found on PATH
+  Next: install Git from https://git-scm.com/downloads, reopen the terminal, and run `git --version`.
+FAIL [required] Codex CLI installed: ccc-doctor-golden-missing-codex-7e57 was not found on PATH
+  Next: run `npm install -g @openai/codex`, then run `codex` in a terminal to sign in.
+SKIP [required] Codex signed in: not checked because the Codex CLI is not installed yet
+FAIL [required] Cursor agent installed: ccc-doctor-golden-missing-agent-7e57 was not found on PATH
+  Next: {{CURSOR_INSTALL_PROSE}}
+SKIP [required] Cursor signed in: not checked because the Cursor Agent CLI is not installed yet
+FAIL [required] Scratch root location: scratch root under AppData is forbidden: {{SCRATCH_ROOT}}
+  Next: set `CCC_SCRATCH_ROOT` to a short local path outside AppData and OneDrive (for example `C:\ccc\w`) and rerun doctor.
+FAIL [required] Scratch root writable: not tested because the configured path is unsafe
+  Next: set `CCC_SCRATCH_ROOT` to a writable local path outside AppData and OneDrive, then rerun doctor.
+FAIL [required] Codex write probe: could not run because Codex, git, or scratch storage failed a prerequisite
+  Next: fix the failed prerequisite above, then rerun `node bin/loop.js doctor --deep`.
+FAIL [required] Cursor read probe: could not run because the agent or scratch storage failed a prerequisite
+  Next: fix the failed prerequisite above, then rerun `node bin/loop.js doctor --deep`.
+
+Optional features (these do not affect loop health):
+INFO [optional] GitHub publishing: optional; the loop is fully usable without it.
+FAIL [optional] GitHub CLI installed: ccc-doctor-golden-missing-gh-7e57 was not found on PATH
+  Next: create an account at https://github.com/signup, install `gh` from https://cli.github.com/, run `gh auth login`, then run `gh repo create OWNER/REPOSITORY --source=. --remote=origin --private --push` from the existing local repository (use `--public` if desired).
+FAIL [optional] GitHub authentication: not checkable until GitHub CLI is installed
+  Next: run `gh auth login`, then confirm with `gh auth status`.
+FAIL [optional] GitHub remote: {{REPOSITORY}} has no github.com remote
+  Next: from the existing local repository run `gh repo create OWNER/REPOSITORY --source=. --remote=origin --private --push` (or replace `--private` with `--public`).
+FAIL [optional] Logdy event viewer: ccc-doctor-golden-missing-logdy-7e57 was not found on PATH; event files and the built-in dashboard still work
+  Next: on macOS run `brew install logdy`; from a POSIX shell run `curl https://logdy.dev/install-silent.sh | sh`; on Windows install the release binary from https://github.com/logdyhq/logdy-core/releases and confirm with `logdy --version`.
+INFO [optional] Offline run journal: available through `node bin/generate-run-journal.js --help`; no external integration is required.
+
+Loop health: UNHEALTHY (one or more required checks failed).
+GitHub publishing and Logdy are optional; the loop is fully usable without them.
