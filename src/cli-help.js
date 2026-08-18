@@ -1,5 +1,5 @@
 export const CLI_COMMANDS = Object.freeze([
-  'run', 'batch', 'status', 'dashboard', 'publish', 'doctor', 'init', 'help',
+  'run', 'batch', 'status', 'dashboard', 'publish', 'doctor', 'setup', 'init', 'help',
 ]);
 
 export const CLI_USAGE = `Usage:
@@ -10,6 +10,8 @@ export const CLI_USAGE = `Usage:
   node bin/loop.js dashboard [<run-directory> | --run <run-directory> | --scratch-root <directory>] [--port <0-65535>]
   node bin/loop.js publish <completed-run-directory>
   node bin/loop.js doctor [--deep] [--scratch-root <directory>] [--repository <directory>]
+  node bin/loop.js doctor --fix [--scratch-root <directory>] [--repository <directory>]
+  node bin/loop.js setup [--scratch-root <directory>]
   node bin/loop.js init <directory>
   node bin/loop.js help
 
@@ -27,5 +29,6 @@ Commands:
   dashboard  Serve the optional read-only local dashboard.
   publish    Optionally publish a completed run through GitHub.
   doctor     Check prerequisites; --deep spends agent tokens on write/read probes.
+  setup      Prepare prerequisites with consent, then scaffold and run an isolated demo.
   init       Create a starter plan.md and runnable gate.json without overwriting.
   help       Print this usage. --help and -h are aliases.`;

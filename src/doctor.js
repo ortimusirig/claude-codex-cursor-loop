@@ -4,6 +4,7 @@ import {
   createDoctorProbeState,
   DOCTOR_CHECKS,
 } from './doctor-checks.js';
+import { fixFailedCheck, selectedRemediation } from './remediation.js';
 
 export {
   CURSOR_AGENT_INSTALL_COMMANDS,
@@ -17,23 +18,23 @@ function statusLine(status, kind, name, detail, next) {
   ];
 }
 
-function selectedRemediation(check, key) {
-  if (key === undefined) return null;
-  if (key === 'default') return check.remediation;
-  const variant = check.remediation.variants?.[key];
-  if (!variant) throw new Error(`unknown remediation variant ${check.id}:${key}`);
-  return { ...check.remediation, ...variant };
-}
-
 export async function runDoctor({
   deep = false,
+  fix = false,
   scratchRoot,
   repository = process.cwd(),
   nodeVersion = process.versions.node,
   bins = { git: 'git', codex: 'codex', agent: 'agent', gh: 'gh', logdy: 'logdy' },
+  consent,
+  remediationExecutor,
+  write = () => {},
 } = {}) {
   if (typeof scratchRoot !== 'string' || scratchRoot === '') {
     throw new TypeError('doctor scratchRoot must be a non-empty string');
+  }
+  if (fix && deep) throw new Error('doctor --fix cannot be combined with --deep');
+  if (fix && typeof consent !== 'function') {
+    throw new TypeError('doctor --fix requires a consent function');
   }
 
   const lines = ['ccc doctor', '', 'Required checks:'];
@@ -56,6 +57,16 @@ export async function runDoctor({
       if (check.kind === 'required' && outcome.status === 'FAIL') requiredFailed = true;
       const next = selectedRemediation(check, outcome.remediationKey)?.prose;
       lines.push(...statusLine(outcome.status, check.kind, check.name, outcome.detail, next));
+      if (fix) {
+        await fixFailedCheck({
+          check,
+          outcome,
+          inputs: { scratchRoot: resolvedScratchRoot },
+          consent,
+          ...(remediationExecutor === undefined ? {} : { executor: remediationExecutor }),
+          write,
+        });
+      }
     }
   };
 

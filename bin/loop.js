@@ -69,13 +69,49 @@ async function main() {
   }
   if (opts.command === 'doctor') {
     const { runDoctor } = await import('../src/doctor.js');
-    const result = await runDoctor({
-      deep: opts.deep,
-      scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
-      repository: opts.repository,
-    });
+    let prompt;
+    if (opts.fix) {
+      const { createInterface } = await import('node:readline/promises');
+      prompt = createInterface({ input: process.stdin, output: process.stdout });
+    }
+    let result;
+    try {
+      result = await runDoctor({
+        deep: opts.deep,
+        fix: opts.fix,
+        scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
+        repository: opts.repository,
+        ...(prompt ? {
+          consent: (question) => prompt.question(question),
+          write: (text) => process.stdout.write(text),
+        } : {}),
+      });
+    } finally {
+      prompt?.close();
+    }
     process.stdout.write(result.output);
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  if (opts.command === 'setup') {
+    const { createInterface } = await import('node:readline/promises');
+    const { runSetup } = await import('../src/setup.js');
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    let result;
+    try {
+      result = await runSetup({
+        scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
+        operatorDirectory: process.cwd(),
+        consent: (question) => prompt.question(question),
+        wait: (question) => prompt.question(question),
+        write: (text) => process.stdout.write(text),
+      });
+    } finally {
+      prompt.close();
+    }
+    if (!result.ok && !['restart-required', 'stopped'].includes(result.status)) {
+      process.exitCode = 1;
+    }
     return;
   }
   if (opts.command === 'init') {

@@ -97,17 +97,34 @@ export function parseArgs(argv) {
       args: argv.slice(1),
       options: {
         deep: { type: 'boolean' },
+        fix: { type: 'boolean' },
         'scratch-root': { type: 'string' },
         repository: { type: 'string' },
       },
       allowPositionals: false,
       strict: true,
     });
+    if (values.deep && values.fix) {
+      throw new Error('doctor --deep and --fix cannot be combined');
+    }
     return {
       command,
       deep: values.deep === true,
+      ...(values.fix === true ? { fix: true } : {}),
       ...(values['scratch-root'] === undefined ? {} : { scratchRoot: values['scratch-root'] }),
       ...(values.repository === undefined ? {} : { repository: values.repository }),
+    };
+  }
+  if (command === 'setup') {
+    const { values } = nodeParseArgs({
+      args: argv.slice(1),
+      options: { 'scratch-root': { type: 'string' } },
+      allowPositionals: false,
+      strict: true,
+    });
+    return {
+      command,
+      ...(values['scratch-root'] === undefined ? {} : { scratchRoot: values['scratch-root'] }),
     };
   }
   if (command === 'init') {

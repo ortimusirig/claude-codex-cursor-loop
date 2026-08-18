@@ -59,6 +59,24 @@ test('parses status with exactly one run directory', () => {
   assert.throws(() => parseArgs(['status', 'one', 'two']), /status <run-directory>/);
 });
 
+test('doctor parses --fix without deep probes and rejects the token-spending combination', () => {
+  assert.deepEqual(parseArgs(['doctor', '--fix', '--scratch-root', 'scratch']), {
+    command: 'doctor', deep: false, fix: true, scratchRoot: 'scratch',
+  });
+  assert.throws(
+    () => parseArgs(['doctor', '--fix', '--deep']),
+    /cannot be combined/,
+  );
+});
+
+test('setup accepts only its optional scratch root', () => {
+  assert.deepEqual(parseArgs(['setup']), { command: 'setup' });
+  assert.deepEqual(parseArgs(['setup', '--scratch-root', 'scratch']), {
+    command: 'setup', scratchRoot: 'scratch',
+  });
+  assert.throws(() => parseArgs(['setup', 'somewhere']), /Unexpected argument/);
+});
+
 test('run and batch parse dashboard controls with the dashboard port rules', () => {
   const run = parseArgs([
     'run', '--task', 'p', '--target', 't', '--gate', 'g',
