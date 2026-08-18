@@ -110,7 +110,7 @@ export async function runSetup({
     return stoppedResult('unsafe-destination', []);
   }
   const autoAttempted = new Set();
-  const successfulFixes = new Set();
+  const installAttemptedOrInstructed = new Set();
   const instructionWaited = new Set();
   const checkCount = Math.max(1, requiredPrerequisiteChecks(checks).length);
   let outcomes = [];
@@ -141,7 +141,7 @@ export async function runSetup({
         continue;
       }
 
-      if (successfulFixes.has(check.id) && /not found on PATH/i.test(outcome.detail)) {
+      if (installAttemptedOrInstructed.has(check.id) && outcome.reason === 'not-on-path') {
         write(`RESTART REQUIRED [required] ${check.name}: installed but not yet visible on PATH.\n`);
         restartRequired.push(check.id);
         continue;
@@ -159,8 +159,8 @@ export async function runSetup({
           ...(remediationExecutor === undefined ? {} : { executor: remediationExecutor }),
           write,
         });
-        if (fixed.status === 'succeeded') successfulFixes.add(check.id);
         if (fixed.attempted) {
+          installAttemptedOrInstructed.add(check.id);
           shouldReprobe = true;
           continue;
         }
@@ -170,6 +170,7 @@ export async function runSetup({
       printInstruction(write, remediation);
       if (!instructionWaited.has(check.id)) {
         instructionWaited.add(check.id);
+        if (remediation?.prose) installAttemptedOrInstructed.add(check.id);
         const answer = await wait(
           `Press Enter after following the instruction for ${check.name}, or type q to stop: `,
           { check, outcome },

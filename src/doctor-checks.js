@@ -182,6 +182,7 @@ export const DOCTOR_CHECKS = Object.freeze([
         : {
             status: 'FAIL',
             detail: `${nodeVersion} does not meet >=${MINIMUM_NODE_MAJOR}`,
+            reason: 'not-on-path',
             remediationKey: 'default',
           };
     },
@@ -210,6 +211,7 @@ export const DOCTOR_CHECKS = Object.freeze([
         return {
           status: 'FAIL',
           detail: `${bins.git} was not found on PATH`,
+          reason: 'not-on-path',
           remediationKey: 'default',
         };
       }
@@ -241,6 +243,7 @@ export const DOCTOR_CHECKS = Object.freeze([
         : {
             status: 'FAIL',
             detail: `${bins.codex} was not found on PATH`,
+            reason: 'not-on-path',
             remediationKey: 'default',
           };
     },
@@ -290,6 +293,7 @@ export const DOCTOR_CHECKS = Object.freeze([
         : {
             status: 'FAIL',
             detail: `${bins.agent} was not found on PATH`,
+            reason: 'not-on-path',
             remediationKey: 'default',
           };
     },

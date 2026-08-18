@@ -122,7 +122,7 @@ hazard is reuse of a unit id in the flat scratch root.
 
 Install the plugin from a clone by running `node install.mjs`, then paste the two exact Claude
 Code commands it prints: `/plugin marketplace add <absolute-clone-path>` followed by
-`/plugin install c-cube-loop@c-cube-loop`. The plugin registers these eight namespaced slash
+`/plugin install c-cube-loop@c-cube-loop`. The plugin registers these nine namespaced slash
 commands while the direct Node CLI remains available:
 
 - `/c-cube-loop:run`
@@ -131,6 +131,7 @@ commands while the direct Node CLI remains available:
 - `/c-cube-loop:dashboard`
 - `/c-cube-loop:publish`
 - `/c-cube-loop:doctor`
+- `/c-cube-loop:setup`
 - `/c-cube-loop:init`
 - `/c-cube-loop:help`
 
@@ -139,7 +140,7 @@ command. It is not a shell alias. The command controller must use the child proc
 code, never stdout text or the exit status of a pipe. The `run` and `batch` prompts explicitly
 load this skill so invoking them cannot bypass the governing law.
 
-The unchanged direct CLI surface is:
+The direct CLI surface is:
 
     node bin/loop.js run ...
     node bin/loop.js batch ...
@@ -147,6 +148,7 @@ The unchanged direct CLI surface is:
     node bin/loop.js dashboard ...
     node bin/loop.js publish ...
     node bin/loop.js doctor ...
+    node bin/loop.js setup ...
     node bin/loop.js init ...
     node bin/loop.js help
 

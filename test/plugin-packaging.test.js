@@ -217,9 +217,7 @@ test('README and the governing skill document plugin installation and every comm
   for (const document of [readme, skill]) {
     assert.match(document, /\/plugin marketplace add/);
     assert.match(document, /\/plugin install c-cube-loop@c-cube-loop/);
-    // setup documentation belongs to the follow-on documentation unit. This unit is
-    // explicitly forbidden from changing README.md or the governing skill document.
-    for (const command of CLI_COMMANDS.filter((candidate) => candidate !== 'setup')) {
+    for (const command of CLI_COMMANDS) {
       assert.ok(document.includes(`/c-cube-loop:${command}`),
         `documentation must name /c-cube-loop:${command}`);
       assert.ok(document.includes(`node bin/loop.js ${command}`),

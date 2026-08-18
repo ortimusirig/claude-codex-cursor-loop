@@ -117,7 +117,7 @@ or delete an existing directory. Add `--name <x>` only with `--personal-skill` f
 destination. `--dry-run` validates and previews either mode without writing or running the
 self-test.
 
-After plugin installation, these are the eight namespaced slash commands:
+After plugin installation, these are the nine namespaced slash commands:
 
 ```text
 /c-cube-loop:run
@@ -126,6 +126,7 @@ After plugin installation, these are the eight namespaced slash commands:
 /c-cube-loop:dashboard
 /c-cube-loop:publish
 /c-cube-loop:doctor
+/c-cube-loop:setup
 /c-cube-loop:init
 /c-cube-loop:help
 ```
@@ -146,6 +147,7 @@ node bin/loop.js status <run-or-campaign-directory>
 node bin/loop.js dashboard [<run-directory>] [--scratch-root <directory>] [--port <port>]
 node bin/loop.js publish <completed-run-directory>
 node bin/loop.js doctor [--deep] [--scratch-root <directory>] [--repository <directory>]
+node bin/loop.js setup [--scratch-root <directory>]
 node bin/loop.js init <directory>
 node bin/loop.js help
 ```

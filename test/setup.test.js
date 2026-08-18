@@ -76,23 +76,66 @@ test('setup terminates when one automatic fix never takes effect', async () => {
     'positive finite bound: initial probe, post-fix probe, and one post-instruction probe');
 });
 
-test('a successful install still absent from PATH becomes restart-required without retry', async () => {
+test('a successful automatic install still absent from PATH becomes restart-required without retry', async () => {
   let executions = 0;
+  let probes = 0;
+  let waits = 0;
   const notVisible = fakeCheck({
     id: 'path-tool',
-    probe: async () => ({
-      status: 'FAIL', detail: 'fake-tool was not found on PATH', remediationKey: 'default',
-    }),
+    probe: async () => {
+      probes++;
+      return {
+        status: 'FAIL',
+        detail: 'fake-tool cannot be resolved by this terminal session',
+        reason: 'not-on-path',
+        remediationKey: 'default',
+      };
+    },
   });
   const result = await runSetup({
     scratchRoot: join(tmpdir(), 'ccc-setup-restart-test'),
     checks: [notVisible],
     consent: async () => true,
-    wait: async () => { throw new Error('restart-required must not wait or loop'); },
+    wait: async () => { waits++; return ''; },
     remediationExecutor: async () => { executions++; return { code: 0 }; },
   });
-  assert.equal(result.status, 'restart-required');
+  assert.equal(result.status, 'restart-required',
+    'structured not-on-PATH reason must drive restart-required despite display wording');
   assert.equal(executions, 1);
+  assert.equal(waits, 0, 'restart-required must not trigger an instruction wait');
+  assert.equal(probes, 2, 'restart-required must return after the single post-fix probe');
+});
+
+test('a manually instructed install still absent from PATH becomes restart-required without retry', async () => {
+  let probes = 0;
+  let waits = 0;
+  const manuallyInstalled = fakeCheck({
+    id: 'manual-path-tool',
+    autoFixable: false,
+    probe: async () => {
+      probes++;
+      return {
+        status: 'FAIL',
+        detail: 'manual-tool was not found on PATH',
+        reason: 'not-on-path',
+        remediationKey: 'default',
+      };
+    },
+  });
+  const result = await runSetup({
+    scratchRoot: join(tmpdir(), 'ccc-setup-manual-restart-test'),
+    checks: [manuallyInstalled],
+    consent: async () => { throw new Error('manual checks must never ask for consent'); },
+    wait: async () => { waits++; return ''; },
+    remediationExecutor: async () => {
+      throw new Error('manual checks must never execute automatic remediation');
+    },
+  });
+
+  assert.equal(result.status, 'restart-required',
+    'an instructed manual install that remains off PATH must require a restart');
+  assert.equal(waits, 1, 'restart-required must not trigger another instruction wait');
+  assert.equal(probes, 2, 'restart-required must return after the single post-instruction probe');
 });
 
 test('declining one fix remains report-only and continues to later checks', async () => {
