@@ -455,7 +455,7 @@ test('the SSE client snapshot retains its exact on-demand-view-independent field
       'liveUnits', 'message', 'mode', 'observedAt', 'runs', 'sourcePath',
     ]);
     assert.deepEqual(Object.keys(client.runs[0]).sort(), [
-      'currentStage', 'currentType', 'endTs', 'files', 'filesChanged', 'lastEventTs',
+      'correctsRunId', 'currentStage', 'currentType', 'endTs', 'files', 'filesChanged', 'lastEventTs',
       'message', 'needsAttention', 'projectPath', 'runId', 'startTs', 'state', 'timeline',
       'title', 'triage',
     ]);
@@ -959,6 +959,91 @@ test('isolate start sources form real and Unknown project buckets in both render
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('dashboard extracts the first string correction id and defaults it to null', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-corrects-extraction-'));
+  makeRun(root, 'corrected-run', [
+    event('corrected-run', 'isolate', 'start', { correctsRunId: 42 }),
+    event('corrected-run', 'isolate', 'start', { correctsRunId: 'parent-run' }),
+    event('corrected-run', 'isolate', 'start', { correctsRunId: 'ignored-later-parent' }),
+  ]);
+  makeRun(root, 'ordinary-run', [event('ordinary-run', 'executor', 'start')]);
+  try {
+    const snapshot = buildDashboardSnapshot({ scratchRoot: root });
+    assert.equal(snapshot.runs.find((run) => run.runId === 'corrected-run').correctsRunId,
+      'parent-run');
+    assert.equal(snapshot.runs.find((run) => run.runId === 'ordinary-run').correctsRunId, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function renderedCorrectionRows(html) {
+  return [...html.matchAll(
+    /<tr class="pass-row[^"]*" data-(?:client-)?run-id="([^"]+)" data-correction-depth="(\d+)"/g,
+  )].map((match) => ({ runId: match[1], depth: Number(match[2]) }));
+}
+
+test('a three-run correction chain renders parent-first at increasing depths', () => {
+  const runs = [
+    displayTriageRun('A', '2026-08-15T00:00:00.000Z'),
+    displayTriageRun('B', '2026-08-15T00:30:00.000Z', { correctsRunId: 'A' }),
+    displayTriageRun('C', '2026-08-15T01:00:00.000Z', { correctsRunId: 'B' }),
+  ];
+  const renderings = [
+    ['server', renderSessionList(runs, 2, false)],
+    ['client', renderClientProjectList(runs, false).sessionHtml],
+  ];
+  for (const [name, html] of renderings) {
+    assert.deepEqual(renderedCorrectionRows(html), [
+      { runId: 'A', depth: 0 },
+      { runId: 'B', depth: 1 },
+      { runId: 'C', depth: 2 },
+    ], `${name}: the chain must differ from the plain newest-first C, B, A order`);
+    assert.match(html, /correction-note">corrects <code title="A">A<\/code>/,
+      `${name}: B must explicitly identify A`);
+    assert.match(html, /correction-note">corrects <code title="B">B<\/code>/,
+      `${name}: C must explicitly identify B`);
+  }
+});
+
+test('a correction whose parent is in another session stays unindented and annotated', () => {
+  const runs = [
+    displayTriageRun('parent', '2026-08-15T00:00:00.000Z'),
+    displayTriageRun('correction', '2026-08-15T04:00:00.000Z', {
+      correctsRunId: 'parent',
+    }),
+  ];
+  const renderings = [
+    ['server', renderSessionList(runs, 2, false)],
+    ['client', renderClientProjectList(runs, false).sessionHtml],
+  ];
+  for (const [name, html] of renderings) {
+    const correction = renderedCorrectionRows(html).find((row) => row.runId === 'correction');
+    assert.deepEqual(correction, { runId: 'correction', depth: 0 },
+      `${name}: a cross-session parent must not create visual nesting`);
+    assert.match(html, /correction-note">corrects <code title="parent">parent<\/code>/,
+      `${name}: the cross-session fallback must retain its explicit annotation`);
+  }
+});
+
+test('a correction cycle renders every involved run once and unindented', () => {
+  const runs = [
+    displayTriageRun('cycle-a', '2026-08-15T00:00:00.000Z', { correctsRunId: 'cycle-b' }),
+    displayTriageRun('cycle-b', '2026-08-15T01:00:00.000Z', { correctsRunId: 'cycle-a' }),
+  ];
+  const renderings = [
+    ['server', renderSessionList(runs, 2, false)],
+    ['client', renderClientProjectList(runs, false).sessionHtml],
+  ];
+  for (const [name, html] of renderings) {
+    const rows = renderedCorrectionRows(html);
+    assert.equal(rows.length, 2, `${name}: cycle rendering must return exactly two rows`);
+    assert.deepEqual(new Set(rows.map((row) => row.runId)), new Set(['cycle-a', 'cycle-b']));
+    assert.ok(rows.every((row) => row.depth === 0),
+      `${name}: cycle members must fall back to ordinary unindented rows`);
   }
 });
 

@@ -98,7 +98,7 @@ export function planWithStallNotice(plan, stall) {
 export async function run(opts) {
   const {
     task, target, gate, gateRetries, scratchRoot, runId,
-    baseRef = 'HEAD', branch, branchName, campaignId, campaignBase,
+    baseRef = 'HEAD', branch, branchName, correctsRunId, campaignId, campaignBase,
     round, unitId, campaignUnitKind, perspective, unitKind, merge,
     captureTestCount = false,
     executorModel = DEFAULT_EXECUTOR_MODEL,
@@ -168,6 +168,7 @@ export async function run(opts) {
     baseRef,
     branch,
     branchName,
+    correctsRunId,
     campaignId,
     campaignBase,
   });

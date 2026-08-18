@@ -322,6 +322,7 @@ export async function isolate({
   baseRef = 'HEAD',
   branch: suppliedBranch,
   branchName,
+  correctsRunId,
   campaignId,
   campaignBase,
 }) {
@@ -329,7 +330,12 @@ export async function isolate({
     throw new Error('branch and branchName must match when both are supplied');
   }
   const branch = suppliedBranch ?? branchName ?? `ccc/${runId}`;
-  reportEvent(reporter, runId, 'isolate', 'start', { source: target, baseRef, branch });
+  reportEvent(reporter, runId, 'isolate', 'start', {
+    source: target,
+    baseRef,
+    branch,
+    ...(correctsRunId === undefined ? {} : { correctsRunId }),
+  });
   assertSafeScratchRoot(scratchRoot);
   await validateBranchName(branch);
   const dir = join(scratchRoot, runId, 'w');

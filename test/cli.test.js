@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -121,6 +122,42 @@ test('missing path-like --task fails preflight with exit code 2 and names the pa
   assert.match(r.stdout + r.stderr, /task file not found/i);
 });
 
+test('a missing --corrects run fails preflight before any executor launch', async () => {
+  const fixture = cliFixture();
+  try {
+    const result = await spawnCapture(process.execPath,
+      [...fixture.args, '--corrects', 'missing-prior-run'], { env: fixture.env });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /preflight failed:.*missing-prior-run/i);
+    assert.doesNotMatch(result.stderr, /executor\/(?:start|finish)/,
+      'an invalid correction reference must not launch the executor');
+    assert.deepEqual(readdirSync(fixture.scratchRoot), ['cli-bin'],
+      'preflight failure must not create a new run directory');
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('a real CLI run records --corrects on isolate/start', async () => {
+  const fixture = cliFixture();
+  const priorRunId = 'existing-prior-run';
+  mkdirSync(join(fixture.scratchRoot, priorRunId, 'w'), { recursive: true });
+  try {
+    const result = await spawnCapture(process.execPath,
+      [...fixture.args, '--corrects', priorRunId, '--quiet'], { env: fixture.env });
+    assert.equal(result.code, 0, result.stderr);
+    const facts = JSON.parse(result.stdout);
+    const events = readFileSync(join(facts.dir, 'events.jsonl'), 'utf8')
+      .trim().split(/\r?\n/).map(JSON.parse);
+    const isolateStart = events.find((event) => event.stage === 'isolate' && event.type === 'start');
+    assert.equal(isolateStart.correctsRunId, priorRunId);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.scratchRoot, { recursive: true, force: true });
+  }
+});
+
 test('a real CLI run announces a read-only dashboard before executor events and keeps stdout JSON-only', async () => {
   const fixture = cliFixture();
   let dashboard;
@@ -159,6 +196,9 @@ test('a real CLI run announces a read-only dashboard before executor events and 
     const events = readFileSync(eventPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
     assert.ok(events.some((event) => event.type === 'file_change'));
     assert.ok(events.every((event) => event.runId === facts.runId));
+    const isolateStart = events.find((event) => event.stage === 'isolate' && event.type === 'start');
+    assert.equal(Object.hasOwn(isolateStart, 'correctsRunId'), false,
+      'an ordinary run must retain the existing isolate/start event shape');
   } finally {
     await dashboard?.close();
     rmSync(fixture.root, { recursive: true, force: true });

@@ -160,6 +160,7 @@ directory is modified.
 | `--target` | yes | — | folder to work on, git repo or not |
 | `--gate` | yes | — | path to gate config |
 | `--gate-retries` | no | 2 | 0–3 |
+| `--corrects` | no | none | records that this run's plan corrects the named prior run; display only |
 | `--executor-model` | no | launch-module default | Codex model ID |
 | `--executor-effort` | no | launch-module default | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra` |
 | `--verifier-model` | no | launch-module default | Cursor model ID |

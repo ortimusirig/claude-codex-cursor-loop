@@ -168,6 +168,7 @@ async function main() {
     target: opts.target,
     gate: opts.gate,
     scratchRoot: SCRATCH_ROOT,
+    correctsRunId: opts.command === 'run' ? opts.correctsRunId : undefined,
   });
   if (!pf.ok) {
     process.stderr.write(`preflight failed: ${pf.reason}\n`);
@@ -251,6 +252,7 @@ async function main() {
     executorModel: opts.executorModel,
     executorEffort: opts.executorEffort,
     verifierModel: opts.verifierModel,
+    correctsRunId: opts.correctsRunId,
     scratchRoot: SCRATCH_ROOT,
     runId,
     reporter,

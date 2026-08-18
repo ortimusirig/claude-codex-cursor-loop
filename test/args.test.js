@@ -18,6 +18,16 @@ test('parses a full run invocation', () => {
     'the default parse result keeps its existing shape for callers');
 });
 
+test('--corrects is a string-valued run-only option', () => {
+  const run = parseArgs([
+    'run', '--task', 'p', '--target', 't', '--gate', 'g', '--corrects', 'prior-run-123',
+  ]);
+  assert.equal(run.correctsRunId, 'prior-run-123');
+  assert.throws(() => parseArgs([
+    'batch', '--task', 'p', '--target', 't', '--gate', 'g', '--corrects', 'prior-run-123',
+  ]), /corrects/i);
+});
+
 test('parses --quiet without changing run options', () => {
   const r = parseArgs(['run', '--task', 'p', '--target', 't', '--gate', 'g', '--quiet']);
   assert.equal(r.quiet, true);
@@ -30,6 +40,7 @@ test('applies the retry default and leaves model defaults to run()', () => {
   assert.equal(r.executorModel, undefined);
   assert.equal(r.executorEffort, undefined);
   assert.equal(r.verifierModel, undefined);
+  assert.equal(r.correctsRunId, undefined);
   assert.equal(Object.hasOwn(r, 'maxIterations'), false);
 });
 
