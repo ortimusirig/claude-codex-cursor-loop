@@ -182,7 +182,7 @@ export const DOCTOR_CHECKS = Object.freeze([
         : {
             status: 'FAIL',
             detail: `${nodeVersion} does not meet >=${MINIMUM_NODE_MAJOR}`,
-            reason: 'not-on-path',
+            reason: 'version-unsupported',
             remediationKey: 'default',
           };
     },

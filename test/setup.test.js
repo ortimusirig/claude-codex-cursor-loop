@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { DOCTOR_CHECKS } from '../src/doctor-checks.js';
 import { scaffold } from '../src/init.js';
 import { runSetup } from '../src/setup.js';
 
@@ -136,6 +137,32 @@ test('a manually instructed install still absent from PATH becomes restart-requi
     'an instructed manual install that remains off PATH must require a restart');
   assert.equal(waits, 1, 'restart-required must not trigger another instruction wait');
   assert.equal(probes, 2, 'restart-required must return after the single post-instruction probe');
+});
+
+test('an instructed unsupported Node version reports a version problem, not restart-required', async () => {
+  const nodeVersionCheck = DOCTOR_CHECKS.find((check) => check.id === 'node-version');
+  assert.ok(nodeVersionCheck, 'the Node version check must exist');
+  let waits = 0;
+  let output = '';
+  const result = await runSetup({
+    scratchRoot: join(tmpdir(), 'ccc-setup-node-version-test'),
+    nodeVersion: '22.0.0',
+    checks: [nodeVersionCheck],
+    consent: async () => { throw new Error('manual checks must never ask for consent'); },
+    wait: async () => { waits++; return ''; },
+    write: (text) => { output += text; },
+    remediationExecutor: async () => {
+      throw new Error('manual checks must never execute automatic remediation');
+    },
+  });
+
+  assert.equal(waits, 1, 'the Node install instruction must be acknowledged in this session');
+  assert.equal(result.status, 'prerequisite-incomplete',
+    'an unsupported Node version must never become restart-required after install instruction');
+  assert.equal(result.outcomes[0].outcome.reason, 'version-unsupported',
+    'the Node failure state must name an unsupported version rather than a PATH problem');
+  assert.doesNotMatch(output, /RESTART REQUIRED|visible on PATH/,
+    'unsupported Node output must not report a PATH restart state');
 });
 
 test('declining one fix remains report-only and continues to later checks', async () => {
