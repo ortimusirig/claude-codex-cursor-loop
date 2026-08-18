@@ -14,18 +14,21 @@ import {
 } from 'node:fs';
 import { get } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createContext, runInContext } from 'node:vm';
 import { startDashboard } from '../src/dashboard.js';
 import {
   buildDashboardSnapshot,
   DEFAULT_SESSION_THRESHOLD_HOURS,
   extractTaskTitle,
+  groupRunsByProject,
   inferSessions,
   liveUnitFromRun,
   MAX_RENDERED_DIFF_BYTES,
   renderDashboardPage,
   renderLogRows,
+  renderProjectList,
   renderRunDetail,
   renderSessionList,
   runNeedsAttention,
@@ -453,7 +456,8 @@ test('the SSE client snapshot retains its exact on-demand-view-independent field
     ]);
     assert.deepEqual(Object.keys(client.runs[0]).sort(), [
       'currentStage', 'currentType', 'endTs', 'files', 'filesChanged', 'lastEventTs',
-      'message', 'needsAttention', 'runId', 'startTs', 'state', 'timeline', 'title', 'triage',
+      'message', 'needsAttention', 'projectPath', 'runId', 'startTs', 'state', 'timeline',
+      'title', 'triage',
     ]);
     assert.equal(Object.hasOwn(client, 'logs'), false);
     assert.equal(Object.hasOwn(client, 'graph'), false);
@@ -765,6 +769,54 @@ function displayTriageRun(runId, startTs, overrides = {}) {
   };
 }
 
+function renderClientProjectList(runs, attentionOnly) {
+  const shell = renderDashboardPage({
+    sourcePath: 'portable-fixture', message: null, runs: [], liveUnits: [], campaigns: [],
+    mode: 'scratch', observedAt: '2026-08-15T00:00:00.000Z',
+  });
+  const script = shell.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script, 'the dashboard page must include its executable inline client script');
+  const sessionsElement = { innerHTML: '' };
+  const elements = {
+    connection: { textContent: '' },
+    runs: { addEventListener() {} },
+    sessions: sessionsElement,
+    'attention-only': { checked: attentionOnly, addEventListener() {} },
+    'initial-dashboard-data': { textContent: JSON.stringify({ runs, liveUnits: [] }) },
+  };
+  class FakeEventSource {
+    addEventListener() {}
+  }
+  const context = createContext({
+    document: {
+      getElementById(id) { return elements[id] ?? null; },
+      querySelectorAll() { return []; },
+    },
+    EventSource: FakeEventSource,
+    setInterval() {},
+  });
+  runInContext(script, context);
+  const sessionHtml = runInContext(
+    `state.attentionOnly=${JSON.stringify(attentionOnly)};renderSessionGroups(state.snapshot.runs)`,
+    context,
+  );
+  runInContext('renderSessions()', context);
+  return { html: sessionsElement.innerHTML, sessionHtml };
+}
+
+function projectCard(html, projectPath) {
+  const marker = `<details class="project" data-project-path="${projectPath ?? ''}"`;
+  const start = html.indexOf(marker);
+  assert.notEqual(start, -1, `expected a project card for ${projectPath ?? 'Unknown project'}`);
+  const next = html.indexOf('<details class="project"', start + marker.length);
+  return html.slice(start, next === -1 ? html.length : next);
+}
+
+function projectOpeningTag(html, projectPath) {
+  const card = projectCard(html, projectPath);
+  return card.slice(0, card.indexOf('>') + 1);
+}
+
 test('session inference groups the just-under gap and splits the just-over gap', () => {
   const newest = triageRun('newest', '2026-08-15T04:00:00.000Z');
   const justUnder = triageRun('just-under', '2026-08-15T02:00:01.000Z');
@@ -805,6 +857,132 @@ test('session headers use the newest pass title and count other differing titles
   const mixedHtml = renderSessionList(mixed, 2, false);
   assert.match(mixedHtml, /<summary><span><b>Newest task \+1 more<\/b>/,
     'one other run with a different non-null title must be counted');
+});
+
+test('project grouping wraps multiple full paths and auto-collapses exactly one project', () => {
+  const leftPath = join('fixture-targets', 'left', 'shared-repository');
+  const rightPath = join('fixture-targets', 'right', 'shared-repository');
+  const multiple = [
+    displayTriageRun('left-new', '2026-08-15T06:00:00.000Z', { projectPath: leftPath }),
+    displayTriageRun('left-old', '2026-08-15T03:00:00.000Z', { projectPath: leftPath }),
+    displayTriageRun('right-new', '2026-08-15T05:00:00.000Z', { projectPath: rightPath }),
+    displayTriageRun('right-old', '2026-08-15T02:00:00.000Z', { projectPath: rightPath }),
+  ];
+  assert.deepEqual(groupRunsByProject(multiple).map((project) => project.projectPath), [
+    leftPath, rightPath,
+  ], 'full paths sharing a basename must stay distinct and sort by newest pass');
+
+  const single = [
+    displayTriageRun('single-new', '2026-08-15T06:00:00.000Z', { projectPath: leftPath }),
+    displayTriageRun('single-middle', '2026-08-15T03:00:00.000Z', { projectPath: leftPath }),
+    displayTriageRun('single-old', '2026-08-15T00:00:00.000Z', { projectPath: leftPath }),
+  ];
+  const renderings = [
+    {
+      name: 'server',
+      multipleHtml: renderProjectList(multiple, 2, false),
+      singleHtml: renderProjectList(single, 2, false),
+      directSessionHtml: renderSessionList(single, 2, false),
+    },
+    {
+      name: 'client',
+      multipleHtml: renderClientProjectList(multiple, false).html,
+      singleHtml: renderClientProjectList(single, false).html,
+      directSessionHtml: renderClientProjectList(single, false).sessionHtml,
+    },
+  ];
+
+  for (const rendering of renderings) {
+    assert.equal((rendering.multipleHtml.match(/<details class="project"/g) ?? []).length, 2,
+      `${rendering.name}: multiple projects must produce two wrappers`);
+    assert.ok(rendering.multipleHtml.indexOf(`data-project-path="${leftPath}"`)
+      < rendering.multipleHtml.indexOf(`data-project-path="${rightPath}"`),
+    `${rendering.name}: the newest project must render first`);
+    const leftCard = projectCard(rendering.multipleHtml, leftPath);
+    const rightCard = projectCard(rendering.multipleHtml, rightPath);
+    assert.equal((leftCard.match(/class="session"/g) ?? []).length, 2,
+      `${rendering.name}: the left project must have two sessions`);
+    assert.equal((rightCard.match(/class="session"/g) ?? []).length, 2,
+      `${rendering.name}: the right project must have two sessions`);
+    assert.ok(leftCard.includes('left-new') && leftCard.includes('left-old'));
+    assert.ok(!leftCard.includes('right-new') && !leftCard.includes('right-old'));
+    assert.ok(rightCard.includes('right-new') && rightCard.includes('right-old'));
+    assert.ok(!rightCard.includes('left-new') && !rightCard.includes('left-old'));
+    assert.ok(leftCard.includes(`<b>${basename(leftPath)}</b><small>${leftPath}</small>`),
+      `${rendering.name}: the project headline must pair basename and full path`);
+
+    assert.doesNotMatch(rendering.singleHtml, /<details class="project"/,
+      `${rendering.name}: one project must not gain a wrapper`);
+    assert.equal(rendering.singleHtml, rendering.directSessionHtml,
+      `${rendering.name}: one project must preserve the session renderer byte-for-byte`);
+    assert.match(rendering.singleHtml, /<details class="session"/,
+      `${rendering.name}: the positive single-project fixture must still render sessions`);
+  }
+});
+
+test('isolate start sources form real and Unknown project buckets in both renderers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-project-path-'));
+  const knownPath = join(root, 'targets', 'known-project');
+  makeRun(root, 'known-run', [
+    event('known-run', 'isolate', 'start', { ts: '2026-08-15T00:00:00.000Z', source: 42 }),
+    event('known-run', 'isolate', 'start', {
+      ts: '2026-08-15T00:00:01.000Z', source: knownPath,
+    }),
+    event('known-run', 'isolate', 'start', {
+      ts: '2026-08-15T00:00:02.000Z', source: join(root, 'ignored-later-source'),
+    }),
+    event('known-run', 'report', 'finish', { ts: '2026-08-15T00:01:00.000Z' }),
+  ]);
+  makeRun(root, 'unknown-run', [
+    event('unknown-run', 'executor', 'start', { ts: '2026-08-15T04:00:00.000Z' }),
+    event('unknown-run', 'report', 'finish', { ts: '2026-08-15T04:01:00.000Z' }),
+  ]);
+  try {
+    const snapshot = buildDashboardSnapshot({ scratchRoot: root });
+    assert.equal(snapshot.runs.find((run) => run.runId === 'known-run').projectPath, knownPath,
+      'the first isolate/start event with a string source must win');
+    assert.equal(snapshot.runs.find((run) => run.runId === 'unknown-run').projectPath, null);
+    const renderings = [
+      ['server', renderProjectList(snapshot.runs, 2, false)],
+      ['client', renderClientProjectList(snapshot.runs, false).html],
+    ];
+    for (const [name, html] of renderings) {
+      assert.equal((html.match(/<details class="project"/g) ?? []).length, 2,
+        `${name}: real and unknown paths must make two project wrappers`);
+      const unknownCard = projectCard(html, null);
+      const knownCard = projectCard(html, knownPath);
+      assert.ok(unknownCard.includes('<b>Unknown project</b><small>Unknown project</small>'));
+      assert.ok(unknownCard.includes('title="unknown-run"')
+        && !unknownCard.includes('title="known-run"'));
+      assert.ok(knownCard.includes('title="known-run"')
+        && !knownCard.includes('title="unknown-run"'));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('attention-only filtering hides a project whose every session is clean', () => {
+  const cleanPath = join('fixture-targets', 'clean-project');
+  const attentionPath = join('fixture-targets', 'attention-project');
+  const runs = [
+    displayTriageRun('clean-new', '2026-08-15T05:00:00.000Z', { projectPath: cleanPath }),
+    displayTriageRun('clean-old', '2026-08-15T01:00:00.000Z', { projectPath: cleanPath }),
+    displayTriageRun('failed-pass', '2026-08-15T04:00:00.000Z', {
+      projectPath: attentionPath, gateResult: 'failed',
+    }),
+  ];
+  const renderings = [
+    ['server', renderProjectList(runs, 2, true)],
+    ['client', renderClientProjectList(runs, true).html],
+  ];
+  for (const [name, html] of renderings) {
+    assert.match(projectOpeningTag(html, cleanPath), / hidden>/,
+      `${name}: the all-clean project must be hidden`);
+    assert.doesNotMatch(projectOpeningTag(html, attentionPath), / hidden>/,
+      `${name}: a project with an attention pass must remain visible`);
+    assert.ok(projectCard(html, attentionPath).includes('failed-pass'));
+  }
 });
 
 test('needs-attention includes every qualifying seat and excludes a clean pass', () => {
