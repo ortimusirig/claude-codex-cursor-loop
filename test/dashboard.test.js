@@ -202,10 +202,10 @@ test('TASK.md title truncation prefers punctuation, then a word boundary', () =>
     'Summarize the first complete thought.…',
   );
 
-  const wordBoundary = 'Build dashboard titles using the last available word boundary without splitting important terminology';
+  const wordBoundary = 'Build dashboard titles using the last available word boundary deliberately preserving important terminology';
   assert.equal(
     extractTaskTitle(`# Task\n\n${wordBoundary}\n`),
-    'Build dashboard titles using the last available word boundary without…',
+    'Build dashboard titles using the last available word boundary…',
   );
 
   const shortTitle = 'A concise title stays exactly as written';
