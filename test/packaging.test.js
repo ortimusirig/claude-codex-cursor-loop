@@ -30,14 +30,8 @@ test('the repository ships a substantive MIT license', () => {
   assert.equal(fileURLToPath(new URL(`../${link[1]}`, import.meta.url)), licensePath);
 });
 
-test('the installer payload includes every shippable top-level entry', () => {
-  // install.mjs is source-only, so the installer's own installed-copy self-test
-  // verifies the materialized payload instead of reparsing an absent script.
-  if (!existsSync(installerPath)) {
-    assert.ok(existsSync(licensePath), 'the installed payload must contain LICENSE');
-    return;
-  }
-
+test('the plugin verifier payload includes every shippable top-level entry', () => {
+  assert.ok(existsSync(installerPath), 'the repository checkout must contain install.mjs');
   const installer = readFileSync(installerPath, 'utf8');
   const declaration = installer.match(/const PAYLOAD\s*=\s*(\[[\s\S]*?\]);/);
   assert.ok(declaration, 'install.mjs must declare a literal PAYLOAD array');

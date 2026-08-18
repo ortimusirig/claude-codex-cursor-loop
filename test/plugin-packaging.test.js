@@ -125,11 +125,7 @@ test('every command has valid front matter, the CLI description, and controller 
 });
 
 test('plugin and marketplace manifests have the required identity and root layout', () => {
-  if (!existsSync(installerPath) && !existsSync(pluginManifestPath)) {
-    assert.ok(existsSync(join(root, 'SKILL.md')),
-      'the opt-in standalone installation must retain its root SKILL.md');
-    return;
-  }
+  assert.ok(existsSync(installerPath), 'the repository checkout must contain install.mjs');
   assert.ok(existsSync(pluginManifestPath), 'plugin.json must exist inside .claude-plugin/');
   assert.ok(existsSync(marketplaceManifestPath), 'marketplace.json must exist inside .claude-plugin/');
   const plugin = JSON.parse(readFileSync(pluginManifestPath, 'utf8'));
@@ -166,10 +162,7 @@ test('plugin and marketplace manifests have the required identity and root layou
 });
 
 test('installer dry-run leaves all Claude Code managed state byte-identical', () => {
-  if (!existsSync(installerPath)) {
-    assert.ok(existsSync(packagePath), 'installed-copy self-test must still run from the payload');
-    return;
-  }
+  assert.ok(existsSync(installerPath), 'the repository checkout must contain install.mjs');
   const home = mkdtempSync(join(tmpdir(), 'ccc-managed-state-'));
   const statePaths = [
     join(home, '.claude', 'plugins', 'known_marketplaces.json'),
