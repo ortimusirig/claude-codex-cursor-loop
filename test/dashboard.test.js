@@ -20,7 +20,9 @@ import { startDashboard } from '../src/dashboard.js';
 import {
   buildDashboardSnapshot,
   DEFAULT_SESSION_THRESHOLD_HOURS,
+  extractTaskTitle,
   inferSessions,
+  liveUnitFromRun,
   MAX_RENDERED_DIFF_BYTES,
   renderDashboardPage,
   renderLogRows,
@@ -30,6 +32,11 @@ import {
   snapshotForClient,
 } from '../src/dashboard-view.js';
 import { spawnCapture } from '../src/spawn.js';
+import {
+  DEFAULT_EXECUTOR_TIMEOUT_MS,
+  DEFAULT_GATE_TIMEOUT_MS,
+  DEFAULT_VERIFIER_TIMEOUT_MS,
+} from '../src/timeouts.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 
@@ -137,6 +144,49 @@ function snapshotContents(directory) {
   walk(directory);
   return rows;
 }
+
+test('TASK.md title extraction skips boilerplate and handles empty and long plans', () => {
+  const realisticPlan = [
+    '# Task',
+    '',
+    'Give dashboard passes and sessions useful titles',
+    '',
+    '## Required behavior',
+    '',
+    'Read the title without changing any run files.',
+  ].join('\n');
+  const extracted = extractTaskTitle(realisticPlan);
+  assert.equal(extracted, 'Give dashboard passes and sessions useful titles');
+  assert.notEqual(extracted, null, 'a realistic multi-paragraph plan must yield a title');
+  assert.equal(extractTaskTitle('# Task\n\n'), null);
+  assert.equal(extractTaskTitle(''), null);
+
+  const longLine = 'x'.repeat(120);
+  assert.equal(extractTaskTitle(`# Task\n\n${longLine}\n`), `${'x'.repeat(89)}…`);
+});
+
+test('run titles are read from either TASK.md layout and rendered above the short pass id', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-title-layouts-'));
+  const nested = makeRun(root, 'nested-task-run', [
+    event('nested-task-run', 'report', 'finish', { ts: '2026-08-15T00:00:00.000Z' }),
+  ]);
+  const direct = makeRun(root, 'direct-task-run', [
+    event('direct-task-run', 'report', 'finish', { ts: '2026-08-15T01:00:00.000Z' }),
+  ]);
+  writeFileSync(join(nested.work, 'TASK.md'), '# Task\n\nNested task title\n');
+  writeFileSync(join(direct.directory, 'TASK.md'), '# Task\n\nDirect task title\n');
+  try {
+    const snapshot = buildDashboardSnapshot({ scratchRoot: root });
+    assert.equal(snapshot.runs.find((run) => run.runId === 'nested-task-run').title,
+      'Nested task title');
+    assert.equal(snapshot.runs.find((run) => run.runId === 'direct-task-run').title,
+      'Direct task title');
+    const html = renderSessionList(snapshot.runs, 2, false);
+    assert.match(html, /class="pass-identity"><b>Direct task title<\/b><small><code title="direct-task-run">direct-task-run<\/code>/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('dashboard starts on loopback, serves one self-contained page, and shows current stage', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-page-'));
@@ -354,7 +404,7 @@ test('the SSE client snapshot retains its exact on-demand-view-independent field
     ]);
     assert.deepEqual(Object.keys(client.runs[0]).sort(), [
       'currentStage', 'currentType', 'endTs', 'files', 'filesChanged', 'lastEventTs',
-      'message', 'needsAttention', 'runId', 'startTs', 'state', 'timeline', 'triage',
+      'message', 'needsAttention', 'runId', 'startTs', 'state', 'timeline', 'title', 'triage',
     ]);
     assert.equal(Object.hasOwn(client, 'logs'), false);
     assert.equal(Object.hasOwn(client, 'graph'), false);
@@ -640,6 +690,7 @@ test('the dashboard command reports an occupied fixed port instead of rebinding'
 function triageRun(runId, startTs, overrides = {}) {
   return {
     runId,
+    title: null,
     startTs,
     endTs: startTs,
     gateResult: 'passed',
@@ -648,6 +699,20 @@ function triageRun(runId, startTs, overrides = {}) {
       intent: { verdict: 'NO_BLOCKERS', verdictSource: 'assistant' },
     },
     ...overrides,
+  };
+}
+
+function displayTriageRun(runId, startTs, overrides = {}) {
+  const run = triageRun(runId, startTs, overrides);
+  return {
+    ...run,
+    needsAttention: runNeedsAttention(run),
+    filesChanged: [],
+    triage: {
+      gate: { kind: run.gateResult === 'failed' ? 'issues' : 'clean', text: run.gateResult },
+      correctness: { kind: 'clean', text: run.verifiers.correctness.verdict },
+      intent: { kind: 'clean', text: run.verifiers.intent.verdict },
+    },
   };
 }
 
@@ -662,7 +727,7 @@ test('session inference groups the just-under gap and splits the just-over gap',
   ], '1:59:59 must stay in one session while the consecutive 2:00:02 gap starts another');
 });
 
-test('changing the heuristic threshold regroups the same passes', () => {
+test('an explicit inferSessions threshold still regroups the same passes', () => {
   const runs = [
     triageRun('three', '2026-08-15T04:00:00.000Z'),
     triageRun('two', '2026-08-15T02:00:01.000Z'),
@@ -670,7 +735,27 @@ test('changing the heuristic threshold regroups the same passes', () => {
   ];
   assert.deepEqual(inferSessions(runs, 2).map((session) => session.passCount), [2, 1]);
   assert.deepEqual(inferSessions(runs, 2.01).map((session) => session.passCount), [3],
-    'raising the on-page threshold above both boundary gaps must combine the same passes');
+    'an explicit threshold above both boundary gaps must combine the same passes');
+});
+
+test('session headers use the newest pass title and count other differing titles', () => {
+  const shared = [
+    displayTriageRun('shared-newest', '2026-08-15T01:00:00.000Z', { title: 'Shared work' }),
+    displayTriageRun('shared-older', '2026-08-15T00:00:00.000Z', { title: 'Shared work' }),
+  ];
+  const sharedHtml = renderSessionList(shared, 2, false);
+  assert.match(sharedHtml,
+    /<summary><span><b>Shared work<\/b><small>2026-08-15 00:00:00[.]000 UTC · 1h 0m<\/small>/);
+  assert.doesNotMatch(sharedHtml, /Shared work \+\d+ more/,
+    'identical pass titles must not produce a mixed-session suffix');
+
+  const mixed = [
+    displayTriageRun('mixed-newest', '2026-08-15T01:00:00.000Z', { title: 'Newest task' }),
+    displayTriageRun('mixed-older', '2026-08-15T00:00:00.000Z', { title: 'Older task' }),
+  ];
+  const mixedHtml = renderSessionList(mixed, 2, false);
+  assert.match(mixedHtml, /<summary><span><b>Newest task \+1 more<\/b>/,
+    'one other run with a different non-null title must be counted');
 });
 
 test('needs-attention includes every qualifying seat and excludes a clean pass', () => {
@@ -726,7 +811,7 @@ test('session rows count all and attention-needing passes independently', () => 
     'the rendered session summary must report the computed attention count');
 });
 
-test('triage is the default collapsed view with visible heuristic and attention controls', () => {
+test('triage keeps fixed session grouping without the editable heuristic control', () => {
   const run = triageRun('default-triage', '2026-08-15T00:00:00.000Z');
   const snapshot = {
     sourcePath: 'portable-fixture', message: null, runs: [{
@@ -749,9 +834,11 @@ test('triage is the default collapsed view with visible heuristic and attention 
   assert.match(html, /data-view-panel="live" hidden/);
   assert.match(html, /data-view-panel="detail" hidden/);
   assert.match(html, /data-view-panel="logs" hidden/);
-  assert.match(html, /Inferred session gap threshold[\s\S]*value="2"[\s\S]*Heuristic only/);
+  assert.doesNotMatch(html, /id="session-threshold"/);
+  assert.doesNotMatch(html, /Heuristic only/);
   assert.match(html, /id="attention-only" type="checkbox" checked/);
-  assert.match(html, /<details class="session"[^>]*>/);
+  assert.match(html, /<details class="session"[^>]*>/,
+    'fixed-default session grouping must remain after removing the input');
   assert.doesNotMatch(html, /<details class="session"[^>]*\sopen(?:\s|>)/,
     'sessions must be collapsed by default');
 });
@@ -799,6 +886,48 @@ test('oversized unified diff is byte-capped and says so plainly', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('live units become stale only after a deadline-owning stage timeout', (t) => {
+  const now = Date.parse('2026-08-18T20:00:00.000Z');
+  t.mock.method(Date, 'now', () => now);
+  const unitFor = (stage, lastEventMs) => liveUnitFromRun({
+    campaignId: null,
+    runId: `run-${stage}`,
+    state: 'running',
+    currentStage: stage,
+    currentType: 'start',
+    lastEventTs: new Date(lastEventMs).toISOString(),
+    timeline: [],
+  });
+  const timeouts = {
+    executor: DEFAULT_EXECUTOR_TIMEOUT_MS,
+    gate: DEFAULT_GATE_TIMEOUT_MS,
+    verify: DEFAULT_VERIFIER_TIMEOUT_MS,
+  };
+
+  for (const [stage, timeoutMs] of Object.entries(timeouts)) {
+    const stale = unitFor(stage, now - timeoutMs - 1);
+    assert.equal(stale.status, 'stale', `${stage} must become stale after its timeout`);
+    assert.equal(stale.statusText, 'Stale — no recent events');
+    assert.equal(unitFor(stage, now - timeoutMs + 1).status, 'active',
+      `${stage} must remain active just under its timeout`);
+  }
+
+  const farPast = now - Math.max(...Object.values(timeouts)) * 10;
+  assert.equal(unitFor('isolate', farPast).status, 'active',
+    'undeadlined Git isolation work must never be age-labelled stale');
+  const staleExecutor = unitFor('executor', farPast);
+  assert.equal(staleExecutor.status, 'stale',
+    'the same old timestamp must detect staleness on an allowlisted stage');
+
+  const html = renderDashboardPage({
+    sourcePath: 'portable-fixture', message: null, runs: [], liveUnits: [staleExecutor],
+    campaigns: [], mode: 'run', observedAt: new Date(now).toISOString(),
+  });
+  assert.match(html, /class="live-unit stale"[\s\S]*Stale — no recent events/);
+  assert.match(html, /[.]live-unit[.]stale\{border-top-color:var\(--stale\)\}/,
+    'stale units must have their own visual status class');
 });
 
 test('live view distinguishes predecessor waiting from an emitted stall', () => {

@@ -16,9 +16,21 @@ import {
 } from './event-stream.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
 import { renderCampaignGraphSvg } from './campaign-graph.js';
+import {
+  DEFAULT_EXECUTOR_TIMEOUT_MS,
+  DEFAULT_GATE_TIMEOUT_MS,
+  DEFAULT_VERIFIER_TIMEOUT_MS,
+} from './timeouts.js';
 
 export const DEFAULT_SESSION_THRESHOLD_HOURS = 2;
 export const MAX_RENDERED_DIFF_BYTES = 128 * 1024;
+
+const TASK_TITLE_MAX_LENGTH = 90;
+const LIVE_STAGE_TIMEOUTS_MS = Object.freeze({
+  executor: DEFAULT_EXECUTOR_TIMEOUT_MS,
+  gate: DEFAULT_GATE_TIMEOUT_MS,
+  verify: DEFAULT_VERIFIER_TIMEOUT_MS,
+});
 
 const LIVE_STAGES = Object.freeze([
   'unit', 'isolate', 'merge', 'executor', 'gate', 'diff', 'verify', 'report',
@@ -47,6 +59,7 @@ function emptyRun(directory, overrides = {}) {
       : join(directory, 'w'),
     eventsPath: null,
     runId: basename(directory),
+    title: null,
     campaignId: null,
     state: 'waiting',
     message: 'Waiting for the event stream to appear.',
@@ -223,13 +236,37 @@ function lastTimestamp(events) {
   return null;
 }
 
+export function extractTaskTitle(text) {
+  if (typeof text !== 'string') return null;
+  const lines = text.split(/\r?\n/);
+  let index = lines[0] === '# Task' ? 1 : 0;
+  while (index < lines.length && lines[index].trim() === '') index += 1;
+  if (index === lines.length) return null;
+  const title = lines[index].trim();
+  if (title.length <= TASK_TITLE_MAX_LENGTH) return title;
+  return `${title.slice(0, TASK_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+function readTaskTitle(directory) {
+  const taskPath = existsSync(join(directory, 'TASK.md'))
+    ? join(directory, 'TASK.md')
+    : join(directory, 'w', 'TASK.md');
+  try {
+    return extractTaskTitle(readFileSync(taskPath, { encoding: 'utf8', flag: 'r' }));
+  } catch {
+    return null;
+  }
+}
+
 function digestRunDirectory(runDirectory) {
   const directory = resolve(runDirectory);
+  const title = readTaskTitle(directory);
   let stream;
   try {
     stream = readEventStream(directory, { allowMissing: true });
   } catch (error) {
     return emptyRun(directory, {
+      title,
       state: 'error',
       message: `Cannot read event stream: ${error.message}`,
     });
@@ -238,12 +275,14 @@ function digestRunDirectory(runDirectory) {
   if (!stream.directoryExists) {
     return emptyRun(directory, {
       runId: stream.runId,
+      title,
       message: `Run directory does not exist yet: ${directory}`,
     });
   }
   if (stream.eventsPath === null) {
     return emptyRun(directory, {
       runId: stream.runId,
+      title,
       message: `Run directory exists; waiting for events.jsonl: ${directory}`,
     });
   }
@@ -316,6 +355,7 @@ function digestRunDirectory(runDirectory) {
     worktreeDirectory,
     eventsPath: stream.eventsPath,
     runId: stream.runId,
+    title,
     campaignId: events.find((event) => typeof event.campaignId === 'string')?.campaignId ?? null,
     state: finished ? 'finished' : events.length > 0 ? 'running' : 'waiting',
     message: events.length > 0 ? null : 'Event stream is empty; waiting for the first event.',
@@ -387,16 +427,25 @@ function isTerminalUnitType(type) {
   return type === 'finish' || type === 'not_dispatched' || type === 'skipped';
 }
 
-function liveUnitFromRun(run) {
+export function liveUnitFromRun(run) {
   const stalled = run.currentType === 'stalled';
+  const timeoutMs = LIVE_STAGE_TIMEOUTS_MS[run.currentStage];
+  const lastEventMs = validTimestamp(run.lastEventTs);
+  const stale = !stalled
+    && run.state !== 'waiting'
+    && timeoutMs !== undefined
+    && lastEventMs !== null
+    && Date.now() - lastEventMs > timeoutMs;
   return {
     campaignId: run.campaignId,
     unitId: run.runId,
     unitKind: null,
-    status: stalled ? 'stalled' : run.state === 'waiting' ? 'waiting-for-events' : 'active',
+    status: stalled ? 'stalled'
+      : run.state === 'waiting' ? 'waiting-for-events'
+        : stale ? 'stale' : 'active',
     statusText: stalled ? 'Stalled — watchdog reported no progress'
       : run.state === 'waiting' ? 'Waiting for events — not stalled'
-        : 'Active',
+        : stale ? 'Stale — no recent events' : 'Active',
     currentStage: run.currentStage,
     currentType: run.currentType,
     lastEventTs: run.lastEventTs,
@@ -602,11 +651,15 @@ function renderPassRow(run, attentionOnly) {
   const hidden = attentionOnly && !run.needsAttention ? ' hidden' : '';
   const files = run.filesChanged.length === 0 ? '0 files'
     : `${run.filesChanged.length} ${run.filesChanged.length === 1 ? 'file' : 'files'}`;
+  const shortId = `<code title="${escapeHtml(run.runId)}">${escapeHtml(shortRunId(run.runId))}</code>`;
+  const identity = typeof run.title === 'string' && run.title.length > 0
+    ? `<span class="pass-identity"><b>${escapeHtml(run.title)}</b><small>${shortId}</small></span>`
+    : shortId;
   return `<tr class="pass-row${run.needsAttention ? ' attention' : ' clean'}" data-run-id="${escapeHtml(run.runId)}"`
     + ` data-needs-attention="${run.needsAttention}"${hidden}>`
     + `<td><button class="pass-detail" type="button" data-detail-run="${escapeHtml(run.runId)}">`
     + `${escapeHtml(shortTime(run.startTs))}</button></td>`
-    + `<td><code title="${escapeHtml(run.runId)}">${escapeHtml(shortRunId(run.runId))}</code></td>`
+    + `<td>${identity}</td>`
     + `<td>${renderTriageState(run.triage.gate)}</td>`
     + `<td>${renderTriageState(run.triage.correctness)}</td>`
     + `<td>${renderTriageState(run.triage.intent)}</td>`
@@ -622,9 +675,16 @@ function renderSessions(runs, thresholdHours, attentionOnly) {
     : '';
   return filterMessage + sessions.map((session) => {
     const hidden = attentionOnly && session.attentionCount === 0 ? ' hidden' : '';
+    const headlineTitle = session.runs[0]?.title ?? null;
+    const differentTitleCount = headlineTitle === null ? 0 : session.runs.slice(1)
+      .filter((run) => run.title !== null && run.title !== undefined && run.title !== headlineTitle)
+      .length;
+    const headline = headlineTitle === null
+      ? fullTime(session.startTs)
+      : `${headlineTitle}${differentTitleCount > 0 ? ` +${differentTitleCount} more` : ''}`;
     return `<details class="session" data-attention-count="${session.attentionCount}"${hidden}>`
-      + `<summary><span><b>${escapeHtml(fullTime(session.startTs))}</b>`
-      + `<small>Inferred session — ${escapeHtml(formatDuration(session.durationMs))}</small></span>`
+      + `<summary><span><b>${escapeHtml(headline)}</b>`
+      + `<small>${escapeHtml(fullTime(session.startTs))} · ${escapeHtml(formatDuration(session.durationMs))}</small></span>`
       + `<span>${session.passCount} ${session.passCount === 1 ? 'pass' : 'passes'}</span>`
       + `<strong>${session.attentionCount} need${session.attentionCount === 1 ? 's' : ''} attention</strong></summary>`
       + '<div class="pass-table-wrap"><table class="passes"><thead><tr><th>Time</th><th>Pass</th>'
@@ -644,10 +704,7 @@ export function renderSessionList(
 
 function renderTriage(snapshot) {
   return '<section id="triage-view" class="view-panel" data-view-panel="triage">'
-    + '<div class="controls"><label>Inferred session gap threshold '
-    + `<input id="session-threshold" type="number" min="0" step="0.25" value="${DEFAULT_SESSION_THRESHOLD_HOURS}"> hours</label>`
-    + '<small>Heuristic only — sessions are regrouped in this page and are not recorded or saved.</small>'
-    + '<label class="toggle"><input id="attention-only" type="checkbox" checked> Show needs-attention passes only</label></div>'
+    + '<div class="controls"><label class="toggle"><input id="attention-only" type="checkbox" checked> Show needs-attention passes only</label></div>'
     + `<div id="sessions">${renderSessions(snapshot.runs, DEFAULT_SESSION_THRESHOLD_HOURS, true)}</div></section>`;
 }
 
@@ -898,6 +955,7 @@ export function snapshotForClient(snapshot) {
     liveUnits: snapshot.liveUnits,
     runs: snapshot.runs.map((run) => ({
       runId: run.runId,
+      title: run.title,
       state: run.state,
       message: run.message,
       startTs: run.startTs,
@@ -925,7 +983,8 @@ function clientScript() {
   return String.raw`
 const connection=document.getElementById('connection');
 const root=document.getElementById('runs');
-const state={snapshot:JSON.parse(document.getElementById('initial-dashboard-data').textContent),view:'triage',threshold:2,attentionOnly:true,detailRunId:null,logsRunId:'all',logsProblemsOnly:false,graphCampaignId:null};
+const DEFAULT_SESSION_GAP_HOURS=${DEFAULT_SESSION_THRESHOLD_HOURS};
+const state={snapshot:JSON.parse(document.getElementById('initial-dashboard-data').textContent),view:'triage',attentionOnly:true,detailRunId:null,logsRunId:'all',logsProblemsOnly:false,graphCampaignId:null};
 function esc(value){return String(value==null?'':value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;')}
 function duration(ms){ms=Math.max(0,Math.floor(ms));if(ms<1000)return ms+' ms';const s=Math.floor(ms/1000);if(s<60)return s+'s';const m=Math.floor(s/60);if(m<60)return m+'m '+(s%60)+'s';return Math.floor(m/60)+'h '+(m%60)+'m'}
 function timeMs(value){const parsed=typeof value==='string'?Date.parse(value):NaN;return Number.isFinite(parsed)?parsed:null}
@@ -934,8 +993,8 @@ function fullTime(value){const parsed=timeMs(value);return parsed===null?'time u
 function shortId(value){return value.length<=18?value:value.slice(0,10)+'…'+value.slice(-7)}
 function sessions(runs,hours){const indexed=runs.map(function(run,index){return{run:run,index:index,time:timeMs(run.startTs)}});indexed.sort(function(a,b){if(a.time===null&&b.time===null)return a.index-b.index;if(a.time===null)return 1;if(b.time===null)return-1;return b.time-a.time||b.run.runId.localeCompare(a.run.runId)});const groups=[];let current=null;const gap=hours*3600000;indexed.forEach(function(item){if(current===null||item.time===null||current.last===null||current.last-item.time>gap){current={runs:[],last:item.time};groups.push(current)}current.runs.push(item.run);current.last=item.time});return groups.map(function(group){const starts=group.runs.map(function(run){return timeMs(run.startTs)}).filter(function(value){return value!==null});const ends=group.runs.map(function(run){return timeMs(run.endTs)}).filter(function(value){return value!==null});const start=starts.length?Math.min.apply(null,starts):null;const end=ends.length?Math.max.apply(null,ends):start;return{runs:group.runs,startTs:start===null?null:new Date(start).toISOString(),durationMs:start===null||end===null?null:Math.max(0,end-start),attentionCount:group.runs.filter(function(run){return run.needsAttention}).length}})}
 function resultCell(result){return'<span class="result '+esc(result.kind)+'" data-result-kind="'+esc(result.kind)+'">'+esc(result.text)+'</span>'}
-function passRow(run){const hidden=state.attentionOnly&&!run.needsAttention?' hidden':'';const count=run.filesChanged.length;const files=count+' '+(count===1?'file':'files');return'<tr class="pass-row '+(run.needsAttention?'attention':'clean')+'" data-client-run-id="'+esc(run.runId)+'" data-needs-attention="'+run.needsAttention+'"'+hidden+'><td><button class="pass-detail" type="button" data-detail-run="'+esc(run.runId)+'">'+esc(shortTime(run.startTs))+'</button></td><td><code title="'+esc(run.runId)+'">'+esc(shortId(run.runId))+'</code></td><td>'+resultCell(run.triage.gate)+'</td><td>'+resultCell(run.triage.correctness)+'</td><td>'+resultCell(run.triage.intent)+'</td><td title="'+esc(run.filesChanged.join(', '))+'">'+esc(files)+'</td></tr>'}
-function renderSessions(){const target=document.getElementById('sessions');if(!target)return;const groups=sessions(state.snapshot.runs,state.threshold);if(!groups.length){target.innerHTML='<section class="empty">No passes to group into sessions.</section>';return}const allFiltered=state.attentionOnly&&groups.every(function(group){return group.attentionCount===0});const message=allFiltered?'<section class="empty filter-empty">No passes need attention. Turn off the filter to see clean passes.</section>':'';target.innerHTML=message+groups.map(function(group){const hidden=state.attentionOnly&&group.attentionCount===0?' hidden':'';return'<details class="session" data-attention-count="'+group.attentionCount+'"'+hidden+'><summary><span><b>'+esc(fullTime(group.startTs))+'</b><small>Inferred session — '+esc(duration(group.durationMs))+'</small></span><span>'+group.runs.length+' '+(group.runs.length===1?'pass':'passes')+'</span><strong>'+group.attentionCount+' need'+(group.attentionCount===1?'s':'')+' attention</strong></summary><div class="pass-table-wrap"><table class="passes"><thead><tr><th>Time</th><th>Pass</th><th>Gate</th><th>Correctness</th><th>Intent</th><th>Files changed</th></tr></thead><tbody>'+group.runs.map(passRow).join('')+'</tbody></table></div></details>'}).join('')}
+function passRow(run){const hidden=state.attentionOnly&&!run.needsAttention?' hidden':'';const count=run.filesChanged.length;const files=count+' '+(count===1?'file':'files');const short='<code title="'+esc(run.runId)+'">'+esc(shortId(run.runId))+'</code>';const identity=run.title?'<span class="pass-identity"><b>'+esc(run.title)+'</b><small>'+short+'</small></span>':short;return'<tr class="pass-row '+(run.needsAttention?'attention':'clean')+'" data-client-run-id="'+esc(run.runId)+'" data-needs-attention="'+run.needsAttention+'"'+hidden+'><td><button class="pass-detail" type="button" data-detail-run="'+esc(run.runId)+'">'+esc(shortTime(run.startTs))+'</button></td><td>'+identity+'</td><td>'+resultCell(run.triage.gate)+'</td><td>'+resultCell(run.triage.correctness)+'</td><td>'+resultCell(run.triage.intent)+'</td><td title="'+esc(run.filesChanged.join(', '))+'">'+esc(files)+'</td></tr>'}
+function renderSessions(){const target=document.getElementById('sessions');if(!target)return;const groups=sessions(state.snapshot.runs,DEFAULT_SESSION_GAP_HOURS);if(!groups.length){target.innerHTML='<section class="empty">No passes to group into sessions.</section>';return}const allFiltered=state.attentionOnly&&groups.every(function(group){return group.attentionCount===0});const message=allFiltered?'<section class="empty filter-empty">No passes need attention. Turn off the filter to see clean passes.</section>':'';target.innerHTML=message+groups.map(function(group){const hidden=state.attentionOnly&&group.attentionCount===0?' hidden':'';const title=group.runs[0]&&group.runs[0].title||null;const different=title===null?0:group.runs.slice(1).filter(function(run){return run.title!=null&&run.title!==title}).length;const headline=title===null?fullTime(group.startTs):title+(different>0?' +'+different+' more':'');return'<details class="session" data-attention-count="'+group.attentionCount+'"'+hidden+'><summary><span><b>'+esc(headline)+'</b><small>'+esc(fullTime(group.startTs))+' · '+esc(duration(group.durationMs))+'</small></span><span>'+group.runs.length+' '+(group.runs.length===1?'pass':'passes')+'</span><strong>'+group.attentionCount+' need'+(group.attentionCount===1?'s':'')+' attention</strong></summary><div class="pass-table-wrap"><table class="passes"><thead><tr><th>Time</th><th>Pass</th><th>Gate</th><th>Correctness</th><th>Intent</th><th>Files changed</th></tr></thead><tbody>'+group.runs.map(passRow).join('')+'</tbody></table></div></details>'}).join('')}
 function stageBar(unit){const stages=['unit','isolate','merge','executor','gate','diff','verify','report'];const current=stages.indexOf(unit.currentStage);const finished=new Set(unit.timeline.filter(function(event){return event.type==='finish'}).map(function(event){return event.stage}));return'<ol class="stage-bar" aria-label="Stage bar for '+esc(unit.unitId)+'">'+stages.map(function(stage,index){const kind=stage===unit.currentStage?'current':finished.has(stage)||(current>=0&&index<current)?'done':'pending';return'<li class="'+kind+'"><span>'+esc(stage)+'</span></li>'}).join('')+'</ol>'}
 function renderLive(){const target=document.getElementById('live-view');if(!target)return;if(!state.snapshot.liveUnits.length){target.innerHTML='<section class="empty">No units are currently in flight.</section>';return}target.innerHTML=state.snapshot.liveUnits.map(function(unit){const age=unit.lastEventTs===null?'no events yet':duration(Date.now()-Date.parse(unit.lastEventTs));return'<article class="live-unit '+esc(unit.status)+'" data-unit-id="'+esc(unit.unitId)+'"><header><div><b>'+esc(unit.unitId)+'</b><small>'+esc(unit.unitKind||'')+'</small></div><strong>'+esc(unit.statusText)+'</strong></header><div class="current"><span>Current stage</span><strong>'+esc(unit.currentStage||'not started')+'</strong><small>'+esc(unit.currentType||'')+'</small><span>Last event</span><strong class="age" data-last-event-ts="'+esc(unit.lastEventTs||'')+'">'+esc(age)+'</strong></div>'+stageBar(unit)+'</article>'}).join('')}
 function refreshAges(){document.querySelectorAll('[data-last-event-ts]').forEach(function(el){const ts=Date.parse(el.dataset.lastEventTs);if(Number.isFinite(ts))el.textContent=duration(Date.now()-ts)})}
@@ -945,7 +1004,7 @@ function syncDetailOptions(){const select=document.getElementById('detail-pass')
 async function refreshLogs(){const target=document.getElementById('logs-body');const select=document.getElementById('logs-pass');if(!target||!select)return;state.logsRunId=select.value||'all';const filter=document.getElementById('problems-only');state.logsProblemsOnly=Boolean(filter&&filter.checked);target.setAttribute('aria-busy','true');try{const query='?runId='+encodeURIComponent(state.logsRunId)+'&problemsOnly='+state.logsProblemsOnly;const response=await fetch('/logs'+query,{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That pass is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load logs: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy')}}
 function syncLogOptions(){const select=document.getElementById('logs-pass');if(!select)return;const wanted=state.logsRunId;select.innerHTML='<option value="all">All runs</option>'+state.snapshot.runs.map(function(run){return'<option value="'+esc(run.runId)+'">'+esc(run.runId)+'</option>'}).join('');if(wanted==='all'||state.snapshot.runs.some(function(run){return run.runId===wanted}))select.value=wanted;else state.logsRunId=select.value='all'}
 async function refreshGraph(){const target=document.getElementById('graph-body');const select=document.getElementById('graph-campaign');if(!target||!select||!select.value)return;state.graphCampaignId=select.value;target.setAttribute('aria-busy','true');try{const response=await fetch('/graph?campaignId='+encodeURIComponent(state.graphCampaignId),{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That campaign is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load campaign graph: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy')}}
-function bind(){const threshold=document.getElementById('session-threshold');if(threshold)threshold.addEventListener('input',function(){const value=Number(threshold.value);if(Number.isFinite(value)&&value>=0){state.threshold=value;renderSessions()}});const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}const copyButton=event.target.closest('[data-copy-command]');if(copyButton&&navigator.clipboard){navigator.clipboard.writeText(copyButton.dataset.copyCommand).then(function(){copyButton.textContent='Copied'}).catch(function(){copyButton.textContent='Select and copy the command'})}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}if(event.target.id==='logs-pass'||event.target.id==='problems-only')refreshLogs();if(event.target.id==='graph-campaign')refreshGraph()})}
+function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}const copyButton=event.target.closest('[data-copy-command]');if(copyButton&&navigator.clipboard){navigator.clipboard.writeText(copyButton.dataset.copyCommand).then(function(){copyButton.textContent='Copied'}).catch(function(){copyButton.textContent='Select and copy the command'})}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}if(event.target.id==='logs-pass'||event.target.id==='problems-only')refreshLogs();if(event.target.id==='graph-campaign')refreshGraph()})}
 bind();
 const stream=new EventSource('/events');
 stream.addEventListener('snapshot',function(event){state.snapshot=JSON.parse(event.data).snapshot;renderSessions();renderLive();syncDetailOptions();syncLogOptions();if(state.view==='detail')refreshDetail();if(state.view==='logs')refreshLogs();if(state.view==='graph')refreshGraph();connection.textContent='Live';refreshAges()});
@@ -963,9 +1022,9 @@ export function renderDashboardPage(snapshot) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CCC run dashboard</title>
 <style>
-:root{color-scheme:light dark;--bg:#f4f5f2;--card:#fff;--ink:#18201d;--muted:#65716b;--line:#d9dedb;--ok:#197047;--warn:#9c5a08;--bad:#a32828;--soft:#eef1ef;--add:#e7f6ed;--remove:#fdeaea}
-@media(prefers-color-scheme:dark){:root{--bg:#111513;--card:#19201d;--ink:#edf2ef;--muted:#a5b0aa;--line:#35403a;--soft:#222b27;--ok:#6ed39e;--warn:#f0ae59;--bad:#ff8b8b;--add:#183c2a;--remove:#472121}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}body>header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:end;justify-content:space-between}h1{font-size:1.15rem;margin:0}body>header p{margin:.15rem 0 0;color:var(--muted);word-break:break-all}.connection{white-space:nowrap;color:var(--ok)}main{display:flex;flex-direction:column;gap:1rem;padding:1rem;min-height:calc(100vh - 70px);max-width:1500px;margin:0 auto;width:100%}button,select,input{font:inherit}.view-tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line)}.view-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:.55rem .9rem;cursor:pointer}.view-tabs button[aria-pressed="true"]{color:var(--ink);border-color:var(--ink);font-weight:700}.controls,.detail-picker,.logs-picker,.graph-picker{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:.75rem;display:flex;align-items:center;gap:.7rem 1.2rem;flex-wrap:wrap}.controls small,.detail-picker small,.logs-picker small,.graph-picker small{color:var(--muted);flex:1}.controls input[type="number"]{width:5rem}.toggle{white-space:nowrap}.empty,.notice{padding:.7rem;background:var(--soft);border-radius:5px}.source-message{margin-bottom:0}.session{background:var(--card);border:1px solid var(--line);border-radius:7px;margin:.7rem 0;overflow:hidden}.session>summary{cursor:pointer;display:grid;grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:1rem;padding:.8rem 1rem}.session>summary span:first-child{display:flex;flex-direction:column}.session>summary small{color:var(--muted)}.session>summary strong{color:var(--bad)}.pass-table-wrap{overflow-x:auto;border-top:1px solid var(--line)}.passes{width:100%;border-collapse:collapse;min-width:950px}.passes th,.passes td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}.passes th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}.pass-detail{border:0;background:transparent;color:inherit;text-decoration:underline;cursor:pointer;padding:0}.result{display:inline-block;font-size:.78rem;font-weight:650}.result.clean{color:var(--ok)}.result.issues{color:var(--bad)}.result.unknown{color:var(--warn)}.result.pending{color:var(--muted)}.live-unit,.run-card{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--warn);border-radius:7px;padding:1rem;margin:.7rem 0}.live-unit.stalled{border-top-color:var(--bad)}.live-unit.waiting-predecessor{border-top-color:var(--warn)}.live-unit>header,.run-card>header{display:flex;justify-content:space-between;gap:.8rem}.live-unit header div{display:flex;gap:.6rem}.live-unit header small{color:var(--muted)}.live-unit header>strong{font-size:.8rem}.run-card.finished{border-top-color:var(--ok)}.run-card.error{border-top-color:var(--bad)}.run-card h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.run-card header p{font-size:.72rem;color:var(--muted);margin:.2rem 0;overflow-wrap:anywhere}.state{border:1px solid currentColor;border-radius:999px;padding:.15rem .55rem;height:max-content;font-size:.75rem}.state.finished{color:var(--ok)}.state.error{color:var(--bad)}.state.running{color:var(--warn)}.current{display:grid;grid-template-columns:auto 1fr;gap:.2rem .65rem;background:var(--soft);padding:.7rem;margin:.8rem 0;border-radius:5px}.current span{color:var(--muted)}.current small{grid-column:2;color:var(--muted)}.stage-bar{display:grid;grid-template-columns:repeat(8,1fr);list-style:none;margin:.7rem 0 0;padding:0;gap:3px}.stage-bar li{height:.55rem;background:var(--line);position:relative}.stage-bar li.done{background:var(--ok)}.stage-bar li.current{background:var(--warn)}.stage-bar span{position:absolute;top:.65rem;font-size:.62rem;color:var(--muted);left:0}.stage-bar{margin-bottom:1.2rem}.run-card section{margin-top:1rem}h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .45rem}.verifier{display:grid;grid-template-columns:1fr auto;gap:.1rem .6rem;border-left:3px solid var(--line);padding:.45rem .6rem;margin:.35rem 0;background:var(--soft)}.verifier span,.verifier em{font-size:.75rem;color:var(--muted)}.verifier em{grid-column:1/-1}.verifier.fail-safe{border-color:var(--warn)}.verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}.verifier-findings{grid-column:1/-1;margin-top:.35rem}.verifier-findings h4{font-size:.75rem;margin:.15rem 0}.verifier-findings pre,.prose,.command{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.command{white-space:pre;overflow:auto;flex:1}.copy-row{display:flex;align-items:start;gap:.5rem}.copy-row button{margin-top:.2rem}.tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}.tokens dt{font-weight:650}.tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}.rows,.stalls{list-style:none;margin:0;padding:0}.rows li,.stalls li{display:flex;justify-content:space-between;gap:.7rem;border-top:1px solid var(--line);padding:.35rem 0}.rows code{overflow-wrap:anywhere}.rows span{white-space:nowrap;color:var(--muted)}.exit-ok{color:var(--ok)!important}.exit-fail{color:var(--bad)!important}.stalls li{justify-content:flex-start;color:var(--bad)}.timeline{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto}.timeline li{display:grid;grid-template-columns:4.8rem 5.5rem 1fr;gap:.35rem;border-left:2px solid var(--line);padding:.25rem .5rem}.timeline time,.timeline span,.timeline small{color:var(--muted)}.timeline small{grid-column:2/-1}.log-list{list-style:none;margin:.7rem 0;padding:0;background:var(--card);border:1px solid var(--line);border-radius:7px;overflow:hidden}.log-list.nested{margin:.55rem 0 0;border-radius:4px}.log-row{display:grid;grid-template-columns:12rem minmax(9rem,auto) minmax(10rem,auto) 1fr;gap:.25rem .7rem;padding:.55rem .7rem;border-top:1px solid var(--line);align-items:start}.log-row:first-child{border-top:0}.log-row time,.log-row span{color:var(--muted)}.log-run{overflow-wrap:anywhere}.raw-event{grid-column:1/-1}.raw-event summary,.log-collapse summary{cursor:pointer}.raw-event pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:.55rem;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}.log-collapse{padding:.55rem .7rem;border-top:1px solid var(--line)}.diff-capped{padding:.6rem;background:var(--soft);border-left:3px solid var(--warn)}.diff{margin:.35rem 0;max-height:65vh;overflow:auto;border:1px solid var(--line);background:var(--card);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.diff-line{display:block;min-height:1.5em;padding:0 .5rem;white-space:pre}.diff-add{background:var(--add);color:var(--ok)}.diff-remove{background:var(--remove);color:var(--bad)}.diff-hunk{color:var(--warn)}.graph-key{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:.7rem 0}.graph-key span,.graph-key strong{border:1px solid var(--line);border-radius:999px;padding:.2rem .55rem;font-size:.75rem}.graph-key .waiting,.graph-key .running{border-color:var(--warn)}.graph-key .finished{border-color:var(--ok)}.graph-key .skipped{border-color:var(--bad)}.graph-frame{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:7px;min-height:240px}.campaign-graph{display:block;min-width:100%;height:auto}.graph-edge{fill:none;stroke:var(--muted);stroke-width:2;marker-end:url(#graph-arrow)}#graph-arrow path{fill:var(--muted)}.graph-node rect{fill:var(--card);stroke:var(--line);stroke-width:2}.graph-node.state-waiting rect,.graph-node.state-running rect{stroke:var(--warn)}.graph-node.state-finished rect{stroke:var(--ok)}.graph-node.state-skipped rect{stroke:var(--bad)}.graph-node.merge-unit>rect:first-of-type{stroke:var(--bad);stroke-width:4}.graph-node .merge-outline{fill:none;stroke:var(--bad);stroke-width:1.5}.graph-node-title{font-weight:700;font-size:13px;fill:var(--ink)}.graph-node-line{font-size:11px;fill:var(--muted)}
+:root{color-scheme:light dark;--bg:#f4f5f2;--card:#fff;--ink:#18201d;--muted:#65716b;--line:#d9dedb;--ok:#197047;--warn:#9c5a08;--bad:#a32828;--stale:#6b4fb3;--soft:#eef1ef;--add:#e7f6ed;--remove:#fdeaea}
+@media(prefers-color-scheme:dark){:root{--bg:#111513;--card:#19201d;--ink:#edf2ef;--muted:#a5b0aa;--line:#35403a;--soft:#222b27;--ok:#6ed39e;--warn:#f0ae59;--bad:#ff8b8b;--stale:#c2a7ff;--add:#183c2a;--remove:#472121}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}body>header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:end;justify-content:space-between}h1{font-size:1.15rem;margin:0}body>header p{margin:.15rem 0 0;color:var(--muted);word-break:break-all}.connection{white-space:nowrap;color:var(--ok)}main{display:flex;flex-direction:column;gap:1rem;padding:1rem;min-height:calc(100vh - 70px);max-width:1500px;margin:0 auto;width:100%}button,select,input{font:inherit}.view-tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line)}.view-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:.55rem .9rem;cursor:pointer}.view-tabs button[aria-pressed="true"]{color:var(--ink);border-color:var(--ink);font-weight:700}.controls,.detail-picker,.logs-picker,.graph-picker{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:.75rem;display:flex;align-items:center;gap:.7rem 1.2rem;flex-wrap:wrap}.controls small,.detail-picker small,.logs-picker small,.graph-picker small{color:var(--muted);flex:1}.toggle{white-space:nowrap}.empty,.notice{padding:.7rem;background:var(--soft);border-radius:5px}.source-message{margin-bottom:0}.session{background:var(--card);border:1px solid var(--line);border-radius:7px;margin:.7rem 0;overflow:hidden}.session>summary{cursor:pointer;display:grid;grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:1rem;padding:.8rem 1rem}.session>summary span:first-child{display:flex;flex-direction:column}.session>summary small{color:var(--muted)}.session>summary strong{color:var(--bad)}.pass-table-wrap{overflow-x:auto;border-top:1px solid var(--line)}.passes{width:100%;border-collapse:collapse;min-width:950px}.passes th,.passes td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}.passes th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}.pass-detail{border:0;background:transparent;color:inherit;text-decoration:underline;cursor:pointer;padding:0}.pass-identity{display:flex;flex-direction:column}.pass-identity small{color:var(--muted)}.result{display:inline-block;font-size:.78rem;font-weight:650}.result.clean{color:var(--ok)}.result.issues{color:var(--bad)}.result.unknown{color:var(--warn)}.result.pending{color:var(--muted)}.live-unit,.run-card{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--warn);border-radius:7px;padding:1rem;margin:.7rem 0}.live-unit.stalled{border-top-color:var(--bad)}.live-unit.stale{border-top-color:var(--stale)}.live-unit.waiting-predecessor{border-top-color:var(--warn)}.live-unit>header,.run-card>header{display:flex;justify-content:space-between;gap:.8rem}.live-unit header div{display:flex;gap:.6rem}.live-unit header small{color:var(--muted)}.live-unit header>strong{font-size:.8rem}.live-unit.stale header>strong{color:var(--stale)}.run-card.finished{border-top-color:var(--ok)}.run-card.error{border-top-color:var(--bad)}.run-card h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.run-card header p{font-size:.72rem;color:var(--muted);margin:.2rem 0;overflow-wrap:anywhere}.state{border:1px solid currentColor;border-radius:999px;padding:.15rem .55rem;height:max-content;font-size:.75rem}.state.finished{color:var(--ok)}.state.error{color:var(--bad)}.state.running{color:var(--warn)}.current{display:grid;grid-template-columns:auto 1fr;gap:.2rem .65rem;background:var(--soft);padding:.7rem;margin:.8rem 0;border-radius:5px}.current span{color:var(--muted)}.current small{grid-column:2;color:var(--muted)}.stage-bar{display:grid;grid-template-columns:repeat(8,1fr);list-style:none;margin:.7rem 0 0;padding:0;gap:3px}.stage-bar li{height:.55rem;background:var(--line);position:relative}.stage-bar li.done{background:var(--ok)}.stage-bar li.current{background:var(--warn)}.stage-bar span{position:absolute;top:.65rem;font-size:.62rem;color:var(--muted);left:0}.stage-bar{margin-bottom:1.2rem}.run-card section{margin-top:1rem}h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .45rem}.verifier{display:grid;grid-template-columns:1fr auto;gap:.1rem .6rem;border-left:3px solid var(--line);padding:.45rem .6rem;margin:.35rem 0;background:var(--soft)}.verifier span,.verifier em{font-size:.75rem;color:var(--muted)}.verifier em{grid-column:1/-1}.verifier.fail-safe{border-color:var(--warn)}.verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}.verifier-findings{grid-column:1/-1;margin-top:.35rem}.verifier-findings h4{font-size:.75rem;margin:.15rem 0}.verifier-findings pre,.prose,.command{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.command{white-space:pre;overflow:auto;flex:1}.copy-row{display:flex;align-items:start;gap:.5rem}.copy-row button{margin-top:.2rem}.tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}.tokens dt{font-weight:650}.tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}.rows,.stalls{list-style:none;margin:0;padding:0}.rows li,.stalls li{display:flex;justify-content:space-between;gap:.7rem;border-top:1px solid var(--line);padding:.35rem 0}.rows code{overflow-wrap:anywhere}.rows span{white-space:nowrap;color:var(--muted)}.exit-ok{color:var(--ok)!important}.exit-fail{color:var(--bad)!important}.stalls li{justify-content:flex-start;color:var(--bad)}.timeline{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto}.timeline li{display:grid;grid-template-columns:4.8rem 5.5rem 1fr;gap:.35rem;border-left:2px solid var(--line);padding:.25rem .5rem}.timeline time,.timeline span,.timeline small{color:var(--muted)}.timeline small{grid-column:2/-1}.log-list{list-style:none;margin:.7rem 0;padding:0;background:var(--card);border:1px solid var(--line);border-radius:7px;overflow:hidden}.log-list.nested{margin:.55rem 0 0;border-radius:4px}.log-row{display:grid;grid-template-columns:12rem minmax(9rem,auto) minmax(10rem,auto) 1fr;gap:.25rem .7rem;padding:.55rem .7rem;border-top:1px solid var(--line);align-items:start}.log-row:first-child{border-top:0}.log-row time,.log-row span{color:var(--muted)}.log-run{overflow-wrap:anywhere}.raw-event{grid-column:1/-1}.raw-event summary,.log-collapse summary{cursor:pointer}.raw-event pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:.55rem;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}.log-collapse{padding:.55rem .7rem;border-top:1px solid var(--line)}.diff-capped{padding:.6rem;background:var(--soft);border-left:3px solid var(--warn)}.diff{margin:.35rem 0;max-height:65vh;overflow:auto;border:1px solid var(--line);background:var(--card);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.diff-line{display:block;min-height:1.5em;padding:0 .5rem;white-space:pre}.diff-add{background:var(--add);color:var(--ok)}.diff-remove{background:var(--remove);color:var(--bad)}.diff-hunk{color:var(--warn)}.graph-key{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:.7rem 0}.graph-key span,.graph-key strong{border:1px solid var(--line);border-radius:999px;padding:.2rem .55rem;font-size:.75rem}.graph-key .waiting,.graph-key .running{border-color:var(--warn)}.graph-key .finished{border-color:var(--ok)}.graph-key .skipped{border-color:var(--bad)}.graph-frame{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:7px;min-height:240px}.campaign-graph{display:block;min-width:100%;height:auto}.graph-edge{fill:none;stroke:var(--muted);stroke-width:2;marker-end:url(#graph-arrow)}#graph-arrow path{fill:var(--muted)}.graph-node rect{fill:var(--card);stroke:var(--line);stroke-width:2}.graph-node.state-waiting rect,.graph-node.state-running rect{stroke:var(--warn)}.graph-node.state-finished rect{stroke:var(--ok)}.graph-node.state-skipped rect{stroke:var(--bad)}.graph-node.merge-unit>rect:first-of-type{stroke:var(--bad);stroke-width:4}.graph-node .merge-outline{fill:none;stroke:var(--bad);stroke-width:1.5}.graph-node-title{font-weight:700;font-size:13px;fill:var(--ink)}.graph-node-line{font-size:11px;fill:var(--muted)}
 @media(max-width:700px){body>header{align-items:start;flex-direction:column}main{padding:.5rem}.session>summary{grid-template-columns:1fr}.controls,.logs-picker,.graph-picker{align-items:start;flex-direction:column}.stage-bar span{display:none}.stage-bar{margin-bottom:0}.log-row{grid-template-columns:1fr}.raw-event{grid-column:1}}
 </style>
 </head>
