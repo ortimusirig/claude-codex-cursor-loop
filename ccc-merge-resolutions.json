@@ -1,0 +1,7 @@
+[
+  {
+    "path": "README.md",
+    "resolution": "Kept the marketplace-first two-command install, retained the clone and node install.mjs workflow under Contributor/development setup, and preserved the nine-command documentation including setup and doctor --fix.",
+    "reason": "This combines both branches' intended documentation while avoiding contradictory install sections and obsolete installation guidance."
+  }
+]

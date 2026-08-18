@@ -5,13 +5,9 @@
 //
 //   node install.mjs                    verify and print plugin install commands
 //   node install.mjs --dry-run          verify and preview without the self-test
-//   node install.mjs --personal-skill   explicitly install the legacy personal skill
-//   node install.mjs --personal-skill --name X
 
 import {
-  cpSync,
   existsSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -29,9 +25,7 @@ const PLUGIN_MANIFEST = join(META_DIRECTORY, 'plugin.json');
 const MARKETPLACE_MANIFEST = join(META_DIRECTORY, 'marketplace.json');
 const PLUGIN_SKILL = join(SRC, 'skills', 'c-cube-loop', 'SKILL.md');
 
-// The opt-in personal-skill mode preserves the old self-contained installation.
-// The source skill is additionally mapped to SKILL.md at the destination root.
-// Plugin metadata is intentionally absent there so the result stays a standalone skill.
+// This inventory defines the source payload whose readability the verifier checks.
 const PAYLOAD = [
   'package.json', 'README.md', 'LICENSE', 'PORTING.md', 'diag.mjs', 'bin', 'src',
   'fixtures', 'test', 'docs', 'cursor-plugin', 'commands', 'skills',
@@ -39,34 +33,16 @@ const PAYLOAD = [
 
 const args = process.argv.slice(2);
 let dryRun = false;
-let personalSkill = false;
-let skillName = 'c-cube-loop';
-let nameSupplied = false;
-for (let index = 0; index < args.length; index++) {
-  const arg = args[index];
+for (const arg of args) {
   if (arg === '--dry-run') dryRun = true;
-  else if (arg === '--personal-skill') personalSkill = true;
-  else if (arg === '--name') {
-    const value = args[++index];
-    if (!value || value.startsWith('--')) {
-      console.error('FAIL: --name requires a skill name');
-      process.exit(1);
-    }
-    skillName = value;
-    nameSupplied = true;
-  } else {
+  else {
     console.error(`FAIL: unknown argument: ${arg}`);
     process.exit(1);
   }
 }
-if (nameSupplied && !personalSkill) {
-  console.error('FAIL: --name is only valid with --personal-skill');
-  process.exit(1);
-}
 
 const skillsDirectory = join(homedir(), '.claude', 'skills');
 const currentPersonalDest = join(skillsDirectory, 'c-cube-loop');
-const dest = join(skillsDirectory, skillName);
 // Keep the superseded name constructible for upgrade detection without retaining it as
 // this package's identifier in source metadata or documentation.
 const previousSkillName = ['claude', 'codex', 'cursor', 'loop'].join('-');
@@ -241,14 +217,13 @@ function payloadFiles() {
     if (statSync(source).isDirectory()) {
       for (const child of walk(source)) {
         if (isPayloadFile(item, child)) {
-          files.push([join(source, child), join(dest, item, child)]);
+          files.push(join(source, child));
         }
       }
     } else {
-      files.push([source, join(dest, item)]);
+      files.push(source);
     }
   }
-  files.push([PLUGIN_SKILL, join(dest, 'SKILL.md')]);
   return files;
 }
 
@@ -282,17 +257,17 @@ function printPluginInstructions(marketplaceName) {
 }
 
 let manifests;
-let copies;
+let payload;
 try {
   manifests = validatePlugin();
-  copies = payloadFiles();
-  for (const [source] of copies) sha(source);
+  payload = payloadFiles();
+  for (const source of payload) sha(source);
 } catch (error) {
   console.error(`FAIL: ${error.message}`);
   process.exit(1);
 }
 
-console.log(`MODE=${personalSkill ? 'personal-skill' : 'plugin-verifier'}`);
+console.log('MODE=plugin-verifier');
 console.log(`source: ${SRC}`);
 console.log(`plugin validation: PASS (${CLI_COMMANDS.length} commands, 1 skill)`);
 
@@ -306,73 +281,19 @@ warnAboutSkillDirectory(
   'previous skill install detected',
   'That directory is now superseded by c-cube-loop and would leave the host with two equivalent skills.',
 );
-if (personalSkill && dest !== currentPersonalDest && dest !== previousDest) {
-  warnAboutSkillDirectory(
-    dest,
-    'requested personal skill target already exists',
-    'That directory would be overwritten by this personal-skill request.',
-  );
-}
 
-if (!personalSkill) {
-  console.log(`payload: ${copies.length} source files readable by SHA-256`);
-  if (!dryRun) {
-    try {
-      runSelfTest(SRC);
-    } catch (error) {
-      console.error(`FAIL: ${error.message}`);
-      process.exit(1);
-    }
-    reportCliAvailability();
-  } else {
-    console.log('--dry-run: no files were written and the self-test was not run.');
+console.log(`payload: ${payload.length} source files readable by SHA-256`);
+if (!dryRun) {
+  try {
+    runSelfTest(SRC);
+  } catch (error) {
+    console.error(`FAIL: ${error.message}`);
+    process.exit(1);
   }
-  printPluginInstructions(manifests.marketplace.name);
-  console.log(`PLUGIN_STATUS=PREPARED mode=plugin${dryRun ? ' dry-run=true' : ''}`);
-  process.exit(0);
+  reportCliAvailability();
+} else {
+  console.log('--dry-run: no files were written and the self-test was not run.');
 }
 
-console.log(`target: ${dest}`);
-if (dryRun) {
-  console.log('\n--dry-run: nothing was written. Personal-skill payload that would be installed:');
-  for (const item of PAYLOAD) console.log(`  ${item}`);
-  console.log('  skills/c-cube-loop/SKILL.md -> SKILL.md');
-  console.log('SKILL_STATUS=PREPARED mode=personal-skill dry-run=true');
-  process.exit(0);
-}
-
-if (existsSync(dest)) {
-  console.error(`FAIL: refusing to overwrite or delete existing personal skill directory: ${dest}`);
-  console.error(`Remove it yourself if intended: ${removalCommand(dest)}`);
-  process.exit(1);
-}
-
-try {
-  mkdirSync(dest, { recursive: true });
-  for (const [source, installed] of copies) {
-    mkdirSync(dirname(installed), { recursive: true });
-    cpSync(source, installed);
-  }
-
-  let checked = 0;
-  for (const [source, installed] of copies) {
-    if (sha(source) !== sha(installed)) throw new Error(`hash mismatch after copy: ${installed}`);
-    checked++;
-  }
-  console.log(`verified: ${checked} files match by SHA-256`);
-  runSelfTest(dest);
-} catch (error) {
-  console.error(`FAIL: ${error.message}`);
-  console.error(`A partial directory may remain at ${dest}; inspect it and remove it manually if needed.`);
-  process.exit(1);
-}
-
-reportCliAvailability();
-const scratch = process.env.CCC_SCRATCH_ROOT ?? (process.platform === 'win32' ? 'C:/ccc/w' : '~/.ccc/w');
-console.log(`scratch root: ${scratch}  (override with CCC_SCRATCH_ROOT)`);
-console.log('\nNext:');
-console.log(`  node "${join(dest, 'bin', 'loop.js')}" doctor`);
-console.log(`  node "${join(dest, 'bin', 'loop.js')}" init <a-folder>`);
-console.log(`  node "${join(dest, 'bin', 'loop.js')}" run --task <plan> --target <folder> --gate <gate.json>`);
-console.log('Add --deep to doctor when you want the token-using Codex write and Cursor read probes.');
-console.log(`SKILL_STATUS=INSTALLED mode=personal-skill name=${skillName}`);
+printPluginInstructions(manifests.marketplace.name);
+console.log(`PLUGIN_STATUS=PREPARED mode=plugin${dryRun ? ' dry-run=true' : ''}`);

@@ -2,7 +2,6 @@ name: tests
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -16,6 +15,7 @@ jobs:
         with:
           node-version: '24'
       # Zero runtime dependencies and no build step, so there is nothing to install.
+      - run: node install.mjs --dry-run
       - run: node --test
 
   unix:
