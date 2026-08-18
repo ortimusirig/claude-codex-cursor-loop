@@ -7,21 +7,14 @@ import {
   buildDashboardSnapshot,
   renderDashboardContent,
   renderDashboardPage,
-  renderLogRows,
-  renderCampaignGraph,
   renderRunDetail,
   snapshotForClient,
 } from './dashboard-view.js';
-import { LogRunNotFoundError, queryLogs } from './log-query.js';
-import { buildCampaignGraph } from './campaign-graph.js';
-import { readCampaignEventStream, readEventStream } from './event-stream.js';
 
 export {
   buildDashboardSnapshot,
   renderDashboardContent,
   renderDashboardPage,
-  renderCampaignGraph,
-  renderLogRows,
   renderRunDetail,
 } from './dashboard-view.js';
 
@@ -32,9 +25,7 @@ function fingerprint(snapshot) {
     mode: snapshot.mode,
     sourcePath: snapshot.sourcePath,
     message: snapshot.message,
-    campaigns: snapshot.campaigns,
     runs: snapshot.runs,
-    liveUnits: snapshot.liveUnits,
   });
 }
 
@@ -84,61 +75,6 @@ export function createDashboardObserver(options, pollIntervalMs = 250) {
       const current = refresh();
       const run = current.runs.find((candidate) => candidate.runId === runId);
       return run ? renderRunDetail(run) : null;
-    },
-    logs(runId, problemsOnly = false) {
-      try {
-        return renderLogRows(queryLogs({ ...options, runId, problemsOnly }), { problemsOnly });
-      } catch (error) {
-        if (error instanceof LogRunNotFoundError) return null;
-        throw error;
-      }
-    },
-    graph(campaignId) {
-      const current = refresh();
-      if (current.mode === 'run') {
-        return campaignId === null
-          ? renderCampaignGraph({
-              nodes: [], edges: [],
-              message: 'A single-run dashboard has no campaign topology to display.',
-            })
-          : null;
-      }
-      if (current.campaigns.length === 0) {
-        return campaignId === null
-          ? renderCampaignGraph({
-              nodes: [], edges: [],
-              message: 'No campaigns are available in this scratch root yet.',
-            })
-          : null;
-      }
-      const selectedId = campaignId ?? (current.campaigns.length === 1
-        ? current.campaigns[0].campaignId
-        : null);
-      if (selectedId === null) {
-        return renderCampaignGraph({
-          nodes: [], edges: [], message: 'Select a campaign to load its graph.',
-        });
-      }
-      const campaign = current.campaigns.find((item) => item.campaignId === selectedId);
-      if (!campaign) return null;
-      const stream = readCampaignEventStream(campaign.directory);
-      const declared = buildCampaignGraph(stream.events);
-      const unitIds = new Set(declared.nodes.map((node) => node.unitId));
-      const unitEvents = [];
-      for (const run of current.runs) {
-        if (!unitIds.has(run.runId)) continue;
-        try {
-          const runStream = readEventStream(run.directory, { allowMissing: true });
-          unitEvents.push(...runStream.events.map((event) => ({
-            ...event,
-            unitId: typeof event.unitId === 'string' ? event.unitId : run.runId,
-          })));
-        } catch {
-          // A unit stream can be between writes or independently unreadable. The declared
-          // campaign graph remains authoritative and will be retried on the next request.
-        }
-      }
-      return renderCampaignGraph(buildCampaignGraph(stream.events, { unitEvents }));
     },
     connect(request, response) {
       response.writeHead(200, {
@@ -214,65 +150,6 @@ export async function startDashboard({
           'Cache-Control': 'no-store',
         });
         response.end('Pass not found\n');
-        return;
-      }
-      response.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-      });
-      response.end(html);
-      return;
-    }
-    if (request.method === 'GET' && requestUrl.pathname === '/logs') {
-      const runId = requestUrl.searchParams.get('runId');
-      const problemsOnly = requestUrl.searchParams.get('problemsOnly') === 'true';
-      let html;
-      try {
-        html = observer.logs(runId, problemsOnly);
-      } catch (error) {
-        response.writeHead(500, {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store',
-        });
-        response.end(`Cannot read logs: ${error.message}\n`);
-        return;
-      }
-      if (html === null) {
-        response.writeHead(404, {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store',
-        });
-        response.end('Pass not found\n');
-        return;
-      }
-      response.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-      });
-      response.end(html);
-      return;
-    }
-    if (request.method === 'GET' && requestUrl.pathname === '/graph') {
-      const campaignId = requestUrl.searchParams.get('campaignId');
-      let html;
-      try {
-        html = observer.graph(campaignId);
-      } catch (error) {
-        response.writeHead(500, {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store',
-        });
-        response.end(`Cannot read campaign graph: ${error.message}\n`);
-        return;
-      }
-      if (html === null) {
-        response.writeHead(404, {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store',
-        });
-        response.end('Campaign not found\n');
         return;
       }
       response.writeHead(200, {

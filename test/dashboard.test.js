@@ -24,10 +24,8 @@ import {
   extractTaskTitle,
   groupRunsByProject,
   inferSessions,
-  liveUnitFromRun,
   MAX_RENDERED_DIFF_BYTES,
   renderDashboardPage,
-  renderLogRows,
   renderProjectList,
   renderRunDetail,
   renderSessionList,
@@ -35,11 +33,6 @@ import {
   snapshotForClient,
 } from '../src/dashboard-view.js';
 import { spawnCapture } from '../src/spawn.js';
-import {
-  DEFAULT_EXECUTOR_TIMEOUT_MS,
-  DEFAULT_GATE_TIMEOUT_MS,
-  DEFAULT_VERIFIER_TIMEOUT_MS,
-} from '../src/timeouts.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 
@@ -54,25 +47,6 @@ function makeRun(root, runId, events, suffix = '') {
   writeFileSync(join(work, 'events.jsonl'), `${events.map(JSON.stringify).join('\n')}`
     + (events.length > 0 ? '\n' : '') + suffix);
   return { directory, work, eventsPath: join(work, 'events.jsonl') };
-}
-
-function makeCampaign(root, campaignId, units, events = [], suffix = '') {
-  const directory = join(root, campaignId);
-  mkdirSync(directory, { recursive: true });
-  const start = {
-    ts: '2026-08-15T00:00:00.000Z', runId: campaignId, campaignId, round: 1,
-    unitId: null, unitKind: null, stage: 'campaign', type: 'start',
-    topology: {
-      units,
-      edges: units.flatMap((unit) => unit.parents.map((parentUnitId) => ({
-        parentUnitId, childUnitId: unit.unitId,
-      }))),
-    },
-  };
-  const records = [start, ...events];
-  writeFileSync(join(directory, 'campaign-events.jsonl'),
-    `${records.map(JSON.stringify).join('\n')}\n${suffix}`);
-  return directory;
 }
 
 async function page(dashboard) {
@@ -240,7 +214,7 @@ test('run titles are read from either TASK.md layout and rendered above the shor
   }
 });
 
-test('dashboard starts on loopback, serves one self-contained page, and shows current stage', async () => {
+test('dashboard serves only populated Triage and Detail views, with removed routes returning 404', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-page-'));
   const runId = 'run-current-stage';
   const run = makeRun(root, runId, [event(runId, 'executor', 'start', { attempt: 1 })]);
@@ -253,194 +227,27 @@ test('dashboard starts on loopback, serves one self-contained page, and shows cu
     assert.match(html, /CCC live run dashboard/);
     assert.match(html, /Current stage<\/span><strong>executor<\/strong>/,
       'the served document itself must carry the current stage');
+    assert.match(html, new RegExp(`data-run-id="${runId}"`),
+      'positive control: Triage must still render the populated pass');
+    assert.match(html, /data-view-panel="detail" hidden[\s\S]*class="run-card running"/,
+      'positive control: Detail must still render the selected pass');
     assert.match(html, /new EventSource\('\/events'\)/);
-    assert.match(html, /data-view="logs" aria-pressed="false">Logs<\/button>/);
-    assert.match(html, /data-view-panel="logs" hidden/);
-    assert.match(html, /data-view="graph" aria-pressed="false">Graph<\/button>/);
-    assert.match(html, /data-view-panel="graph" hidden/);
+    assert.equal((html.match(/<button type="button" data-view=/g) ?? []).length, 2);
+    assert.match(html, /data-view="triage" aria-pressed="true">Triage<\/button>/);
+    assert.match(html, /data-view="detail" aria-pressed="false">Detail<\/button>/);
+    assert.doesNotMatch(html, /data-view="(?:live|logs|graph)"|data-view-panel="(?:live|logs|graph)"/);
+    assert.doesNotMatch(html, /renderLive|refreshLogs|syncLogOptions|refreshGraph|\/logs\?|\/graph\?/);
+    for (const removedRoute of ['logs', 'graph']) {
+      const response = await fetch(new URL(removedRoute, dashboard.url));
+      assert.equal(response.status, 404, `/${removedRoute} must be an unrecognized route`);
+      assert.equal(await response.text(), 'Not found\n');
+    }
     assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/i,
       'the page must make no external asset requests');
   } finally {
     await dashboard?.close();
     rmSync(root, { recursive: true, force: true });
   }
-});
-
-test('Logs fetches raw cross-run rows on demand, filters problems, and rejects an unknown run', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-logs-'));
-  const first = 'logs-run-a';
-  const second = 'logs-run-b';
-  makeRun(root, first, [
-    event(first, 'executor', 'item_completed', {
-      ts: '2026-08-15T00:00:01.000Z', itemType: 'reasoning', file: 'raw-a.js',
-    }),
-    event(first, 'executor', 'item_completed', {
-      ts: '2026-08-15T00:00:02.000Z', itemType: 'message', tokens: { outputTokens: 9 },
-    }),
-  ]);
-  makeRun(root, second, [
-    event(second, 'gate', 'gate_command', {
-      ts: '2026-08-15T00:00:03.000Z', bin: 'npm', args: ['test'], code: 0,
-    }),
-    event(second, 'gate', 'gate_command', {
-      ts: '2026-08-15T00:00:04.000Z', bin: 'npm', args: ['run', 'lint'], code: 5,
-    }),
-  ]);
-  let dashboard;
-  try {
-    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
-    const all = await fetch(new URL('logs?runId=all&problemsOnly=false', dashboard.url));
-    assert.equal(all.status, 200);
-    assert.match(all.headers.get('content-type'), /^text\/html/);
-    const allHtml = await all.text();
-    assert.match(allHtml, /data-collapsed-count="2"/);
-    assert.match(allHtml, /2 executor\/item_completed events/);
-    assert.match(allHtml, /raw-a[.]js/,
-      'the collapsed children retain raw-only fields and are not discarded');
-    assert.match(allHtml, /&quot;outputTokens&quot;: 9/);
-    assert.match(allHtml, /data-log-run-id="logs-run-a"/);
-    assert.match(allHtml, /data-log-run-id="logs-run-b"/);
-    assert.match(allHtml, /npm run lint code=5/,
-      'the view uses the shared stage-aware event phrasing');
-
-    const problems = await fetch(new URL('logs?runId=all&problemsOnly=true', dashboard.url));
-    assert.equal(problems.status, 200);
-    const problemsHtml = await problems.text();
-    assert.match(problemsHtml, /npm run lint code=5/);
-    assert.doesNotMatch(problemsHtml, /npm test code=0/);
-    assert.doesNotMatch(problemsHtml, /raw-a[.]js/);
-
-    const selected = await fetch(new URL(`logs?runId=${first}`, dashboard.url));
-    const selectedHtml = await selected.text();
-    assert.match(selectedHtml, /data-log-run-id="logs-run-a"/);
-    assert.doesNotMatch(selectedHtml, /data-log-run-id="logs-run-b"/);
-
-    const missing = await fetch(new URL('logs?runId=not-a-run', dashboard.url));
-    assert.equal(missing.status, 404);
-    assert.equal(await missing.text(), 'Pass not found\n');
-  } finally {
-    await dashboard?.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('Graph is a fifth on-demand view with campaign selection, live stage enrichment, and 404s', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-graph-'));
-  makeCampaign(root, 'campaign-a', [
-    { unitId: 'a-root', unitKind: 'node', parents: [] },
-  ]);
-  makeCampaign(root, 'campaign-b', [
-    { unitId: 'b-parent', unitKind: 'node', parents: [] },
-    { unitId: 'b-child', unitKind: 'node', parents: ['b-parent'] },
-  ], [], '{"stage":"unit","type":"start"');
-  makeRun(root, 'b-child', [
-    event('b-child', 'gate', 'start', {
-      ts: '2026-08-15T00:00:02.000Z', campaignId: 'campaign-b', round: 1,
-      unitId: 'b-child', unitKind: 'node', attempt: 1,
-    }),
-  ]);
-  let dashboard;
-  try {
-    dashboard = await startDashboard({ scratchRoot: root, port: 0 });
-    const html = await page(dashboard);
-    assert.match(html, /data-view="graph" aria-pressed="false">Graph<\/button>/);
-    assert.match(html, /data-view-panel="graph" hidden/);
-    assert.match(html, /<select id="graph-campaign">[\s\S]*campaign-a[\s\S]*campaign-b/);
-    assert.match(html, /fetch\('\/graph\?campaignId='/,
-      'the graph must be fetched only after the view is opened');
-    assert.doesNotMatch(html, /class="campaign-graph"/,
-      'the initial dashboard response must not inline graph data');
-
-    const response = await fetch(new URL('graph?campaignId=campaign-b', dashboard.url));
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get('content-type'), /^text\/html/);
-    const graphHtml = await response.text();
-    assert.match(graphHtml, /class="campaign-graph"/);
-    assert.match(graphHtml,
-      /data-parent-unit-id="b-parent" data-child-unit-id="b-child"/);
-    assert.match(graphHtml, /data-unit-id="b-child"[\s\S]*Running . gate/,
-      'the on-demand read may enrich orchestration state from the unit stream');
-    assert.doesNotMatch(graphHtml, /stage&quot;:|events\.jsonl/,
-      'the SVG should expose the graph model, not raw event records');
-
-    const missing = await fetch(new URL('graph?campaignId=not-a-campaign', dashboard.url));
-    assert.equal(missing.status, 404);
-    assert.equal(await missing.text(), 'Campaign not found\n');
-  } finally {
-    await dashboard?.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('Graph explains empty scratch roots and single-run dashboards', async () => {
-  const emptyRoot = mkdtempSync(join(tmpdir(), 'ccc-dashboard-empty-graph-'));
-  const runRoot = mkdtempSync(join(tmpdir(), 'ccc-dashboard-run-graph-'));
-  const run = makeRun(runRoot, 'single-run', [event('single-run', 'executor', 'start')]);
-  let emptyDashboard;
-  let runDashboard;
-  try {
-    emptyDashboard = await startDashboard({ scratchRoot: emptyRoot, port: 0 });
-    const emptyPage = await page(emptyDashboard);
-    assert.match(emptyPage, /No campaigns are available in this scratch root yet/);
-    const emptyGraph = await fetch(new URL('graph', emptyDashboard.url));
-    assert.equal(emptyGraph.status, 200);
-    assert.match(await emptyGraph.text(), /No campaigns are available in this scratch root yet/);
-
-    runDashboard = await startDashboard({ runDirectory: run.directory, port: 0 });
-    const runPage = await page(runDashboard);
-    assert.match(runPage, /single-run dashboard has no campaign topology/);
-    const runGraph = await fetch(new URL('graph', runDashboard.url));
-    assert.equal(runGraph.status, 200);
-    assert.match(await runGraph.text(), /single-run dashboard has no campaign topology/);
-    const unknown = await fetch(new URL('graph?campaignId=unknown', runDashboard.url));
-    assert.equal(unknown.status, 404);
-  } finally {
-    await emptyDashboard?.close();
-    await runDashboard?.close();
-    rmSync(emptyRoot, { recursive: true, force: true });
-    rmSync(runRoot, { recursive: true, force: true });
-  }
-});
-
-test('serving a campaign graph leaves every observed byte unchanged', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-graph-readonly-'));
-  makeCampaign(root, 'readonly-campaign', [
-    { unitId: 'readonly-unit', unitKind: 'node', parents: [] },
-  ]);
-  makeRun(root, 'readonly-unit', [event('readonly-unit', 'executor', 'start', {
-    campaignId: 'readonly-campaign', round: 1, unitId: 'readonly-unit', unitKind: 'node',
-  })]);
-  const before = snapshotContents(root);
-  let dashboard;
-  try {
-    dashboard = await startDashboard({ scratchRoot: root, port: 0, pollIntervalMs: 25 });
-    const response = await fetch(new URL('graph?campaignId=readonly-campaign', dashboard.url));
-    assert.equal(response.status, 200);
-    assert.match(await response.text(), /readonly-unit/);
-  } finally {
-    await dashboard?.close();
-  }
-  assert.deepEqual(snapshotContents(root), before);
-  rmSync(root, { recursive: true, force: true });
-});
-
-test('log row rendering exposes every folded record when expanded', () => {
-  const records = [1, 2].map((index) => ({
-    ts: `2026-08-15T00:00:0${index}.000Z`, runId: 'render-group',
-    stage: 'executor', type: 'item_completed', itemType: `raw-${index}`,
-  }));
-  const rows = records.map((record) => ({
-    ...record, kind: 'event', sourceRunId: record.runId,
-    detail: `item=${record.itemType}`, event: record,
-  }));
-  const html = renderLogRows([{
-    kind: 'group', groupType: 'executor/item_completed', count: 2,
-    runId: 'render-group', runIds: ['render-group'], rows, records,
-  }]);
-  assert.match(html, /data-collapsed-count="2"/);
-  assert.equal((html.match(/class="log-row"/g) ?? []).length, 2);
-  assert.match(html, /raw-1/);
-  assert.match(html, /raw-2/);
 });
 
 test('the SSE client snapshot retains its exact on-demand-view-independent field set', () => {
@@ -452,7 +259,7 @@ test('the SSE client snapshot retains its exact on-demand-view-independent field
   try {
     const client = snapshotForClient(buildDashboardSnapshot({ runDirectory: run.directory }));
     assert.deepEqual(Object.keys(client).sort(), [
-      'liveUnits', 'message', 'mode', 'observedAt', 'runs', 'sourcePath',
+      'message', 'mode', 'observedAt', 'runs', 'sourcePath',
     ]);
     assert.deepEqual(Object.keys(client.runs[0]).sort(), [
       'correctsRunId', 'currentStage', 'currentType', 'endTs', 'files', 'filesChanged', 'lastEventTs',
@@ -462,6 +269,7 @@ test('the SSE client snapshot retains its exact on-demand-view-independent field
     assert.equal(Object.hasOwn(client, 'logs'), false);
     assert.equal(Object.hasOwn(client, 'graph'), false);
     assert.equal(Object.hasOwn(client, 'campaigns'), false);
+    assert.equal(Object.hasOwn(client, 'liveUnits'), false);
     assert.equal(Object.hasOwn(client.runs[0], 'events'), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -620,6 +428,10 @@ test('dashboard shows both labelled reviews, provenance, consistency, rationale,
     assert.match(html, /Executor rationale[\s\S]*Kept the local diff intact/);
     assert.ok(html.includes(`code &quot;${run.work}&quot;`),
       `VS Code command must use the actual worktree directory ${run.work}`);
+    const fallbackHref = `vscode://file/${encodeURIComponent(run.work)}`;
+    assert.ok(html.includes(`href="${fallbackHref}">Open in VS Code</a>`),
+      'a run without CHANGES.diff must link to its worktree directory');
+    assert.doesNotMatch(html, new RegExp(encodeURIComponent(join(run.work, 'CHANGES.diff'))));
     assert.match(html, /Correctness[\s\S]*in 11/);
     assert.match(html, /Intent[\s\S]*out 7/);
   } finally {
@@ -705,9 +517,9 @@ test('dashboard serving and SSE observation leave every run byte unchanged', asy
     dashboard = await startDashboard({ runDirectory: run.directory, port: 0, pollIntervalMs: 25 });
     const html = await page(dashboard);
     assert.match(html, /class="state finished">Finished/);
-    const logs = await fetch(new URL('logs?runId=all', dashboard.url));
-    assert.equal(logs.status, 200);
-    await logs.text();
+    const detail = await fetch(new URL(`detail?runId=${runId}`, dashboard.url));
+    assert.equal(detail.status, 200);
+    await detail.text();
     stream = await openSse(dashboard.url);
     await stream.waitFor(/event: snapshot/);
   } finally {
@@ -786,7 +598,7 @@ function displayTriageRun(runId, startTs, overrides = {}) {
 
 function renderClientProjectList(runs, attentionOnly) {
   const shell = renderDashboardPage({
-    sourcePath: 'portable-fixture', message: null, runs: [], liveUnits: [], campaigns: [],
+    sourcePath: 'portable-fixture', message: null, runs: [],
     mode: 'scratch', observedAt: '2026-08-15T00:00:00.000Z',
   });
   const script = shell.match(/<script>([\s\S]*?)<\/script>/)?.[1];
@@ -797,7 +609,7 @@ function renderClientProjectList(runs, attentionOnly) {
     runs: { addEventListener() {} },
     sessions: sessionsElement,
     'attention-only': { checked: attentionOnly, addEventListener() {} },
-    'initial-dashboard-data': { textContent: JSON.stringify({ runs, liveUnits: [] }) },
+    'initial-dashboard-data': { textContent: JSON.stringify({ runs }) },
   };
   class FakeEventSource {
     addEventListener() {}
@@ -1250,14 +1062,14 @@ test('triage keeps fixed session grouping without the editable heuristic control
       verifiers: run.verifiers, tokens: { executor: {}, correctness: {}, intent: {} },
       gateCommands: [], stalls: [], executorRationale: null,
       diff: { message: 'not available', text: '', byteCount: 0, renderedByteCount: 0, capped: false },
-    }], liveUnits: [], mode: 'scratch', observedAt: run.startTs,
+    }], mode: 'scratch', observedAt: run.startTs,
   };
   const html = renderDashboardPage(snapshot);
   assert.match(html, /data-view="triage" aria-pressed="true"/);
   assert.match(html, /data-view-panel="triage">/);
-  assert.match(html, /data-view-panel="live" hidden/);
   assert.match(html, /data-view-panel="detail" hidden/);
-  assert.match(html, /data-view-panel="logs" hidden/);
+  assert.equal((html.match(/<button type="button" data-view=/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /data-view-panel="(?:live|logs|graph)"/);
   assert.doesNotMatch(html, /id="session-threshold"/);
   assert.doesNotMatch(html, /Heuristic only/);
   assert.match(html, /id="attention-only" type="checkbox" checked/);
@@ -1268,7 +1080,7 @@ test('triage keeps fixed session grouping without the editable heuristic control
 });
 
 test('unified diff renders additions and removals with distinct line meanings', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-diff-'));
+  const root = mkdtempSync(join(tmpdir(), 'ccc dashboard diff #-'));
   const runId = 'run-real-diff';
   const run = makeRun(root, runId, [
     event(runId, 'report', 'finish', { ts: '2026-08-15T00:00:00.000Z' }),
@@ -1284,6 +1096,11 @@ test('unified diff renders additions and removals with distinct line meanings', 
   try {
     const snapshot = buildDashboardSnapshot({ runDirectory: run.directory });
     const html = renderRunDetail(snapshot.runs[0]);
+    const diffHref = `vscode://file/${encodeURIComponent(join(run.work, 'CHANGES.diff'))}`;
+    assert.ok(html.includes(`href="${diffHref}">Open in VS Code</a>`),
+      'the clickable link must open the existing full CHANGES.diff path');
+    assert.ok(!html.includes(`href="vscode://file/${encodeURIComponent(run.work)}">Open in VS Code</a>`),
+      'the existing-diff case must not link only to the worktree');
     assert.match(html, /data-diff-line="removed">-const value = &quot;before&quot;;/);
     assert.match(html, /data-diff-line="added">\+const value = &quot;after&quot;;/);
     assert.match(html, /\.diff-add\{background:var\(--add\);color:var\(--ok\)\}|class="diff-line diff-add"/);
@@ -1307,75 +1124,10 @@ test('oversized unified diff is byte-capped and says so plainly', () => {
     assert.equal(rendered.byteCount, Buffer.byteLength(diff));
     const html = renderRunDetail(snapshot.runs[0]);
     assert.match(html, /Diff rendering capped[\s\S]*Showing 131,072 of [\d,]+ bytes/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('live units become stale only after a deadline-owning stage timeout', (t) => {
-  const now = Date.parse('2026-08-18T20:00:00.000Z');
-  t.mock.method(Date, 'now', () => now);
-  const unitFor = (stage, lastEventMs) => liveUnitFromRun({
-    campaignId: null,
-    runId: `run-${stage}`,
-    state: 'running',
-    currentStage: stage,
-    currentType: 'start',
-    lastEventTs: new Date(lastEventMs).toISOString(),
-    timeline: [],
-  });
-  const timeouts = {
-    executor: DEFAULT_EXECUTOR_TIMEOUT_MS,
-    gate: DEFAULT_GATE_TIMEOUT_MS,
-    verify: DEFAULT_VERIFIER_TIMEOUT_MS,
-  };
-
-  for (const [stage, timeoutMs] of Object.entries(timeouts)) {
-    const stale = unitFor(stage, now - timeoutMs - 1);
-    assert.equal(stale.status, 'stale', `${stage} must become stale after its timeout`);
-    assert.equal(stale.statusText, 'Stale — no recent events');
-    assert.equal(unitFor(stage, now - timeoutMs + 1).status, 'active',
-      `${stage} must remain active just under its timeout`);
-  }
-
-  const farPast = now - Math.max(...Object.values(timeouts)) * 10;
-  assert.equal(unitFor('isolate', farPast).status, 'active',
-    'undeadlined Git isolation work must never be age-labelled stale');
-  const staleExecutor = unitFor('executor', farPast);
-  assert.equal(staleExecutor.status, 'stale',
-    'the same old timestamp must detect staleness on an allowlisted stage');
-
-  const html = renderDashboardPage({
-    sourcePath: 'portable-fixture', message: null, runs: [], liveUnits: [staleExecutor],
-    campaigns: [], mode: 'run', observedAt: new Date(now).toISOString(),
-  });
-  assert.match(html, /class="live-unit stale"[\s\S]*Stale — no recent events/);
-  assert.match(html, /[.]live-unit[.]stale\{border-top-color:var\(--stale\)\}/,
-    'stale units must have their own visual status class');
-});
-
-test('live view distinguishes predecessor waiting from an emitted stall', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-live-states-'));
-  const campaignDirectory = join(root, 'campaign-live');
-  mkdirSync(campaignDirectory);
-  writeFileSync(join(campaignDirectory, 'campaign-events.jsonl'), `${JSON.stringify({
-    ts: '2026-08-15T00:00:00.000Z', runId: 'waiting-child', campaignId: 'campaign-live',
-    round: 1, unitId: 'waiting-child', unitKind: 'node', stage: 'unit', type: 'waiting',
-    predecessorUnitId: 'parent-unit',
-  })}\n`);
-  makeRun(root, 'stalled-unit', [
-    event('stalled-unit', 'executor', 'start', { ts: '2026-08-15T00:00:00.000Z' }),
-    event('stalled-unit', 'executor', 'stalled', {
-      ts: '2026-08-15T00:01:01.000Z', gapMs: 61000,
-      lastEvent: { stage: 'executor', type: 'start' },
-    }),
-  ]);
-  try {
-    const html = renderDashboardPage(buildDashboardSnapshot({ scratchRoot: root }));
-    assert.match(html, /waiting-predecessor[\s\S]*Waiting on predecessor: parent-unit/);
-    assert.match(html, /class="live-unit stalled"[\s\S]*Stalled — watchdog reported no progress/);
-    assert.doesNotMatch(html, /waiting-predecessor[\s\S]{0,200}watchdog reported no progress/,
-      'declared dependency waiting must not be labelled as a stall');
+    const diffHref = `vscode://file/${encodeURIComponent(join(run.work, 'CHANGES.diff'))}`;
+    const cappedNotice = html.match(/<p class="diff-capped">([\s\S]*?)<\/p>/)?.[1];
+    assert.ok(cappedNotice?.includes(`href="${diffHref}">Open in VS Code</a>`),
+      'the capped notice must link to the complete CHANGES.diff file');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -9,33 +9,14 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { CCC_DASHBOARD_MARKER } from './dashboard-config.js';
-import {
-  CAMPAIGN_EVENTS_FILENAME,
-  readCampaignEventStream,
-  readEventStream,
-} from './event-stream.js';
+import { CAMPAIGN_EVENTS_FILENAME, readEventStream } from './event-stream.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
-import { renderCampaignGraphSvg } from './campaign-graph.js';
-import {
-  DEFAULT_EXECUTOR_TIMEOUT_MS,
-  DEFAULT_GATE_TIMEOUT_MS,
-  DEFAULT_VERIFIER_TIMEOUT_MS,
-} from './timeouts.js';
 
 export const DEFAULT_SESSION_THRESHOLD_HOURS = 2;
 export const MAX_RENDERED_DIFF_BYTES = 128 * 1024;
 
 const TASK_TITLE_MAX_LENGTH = 70;
 const TASK_TITLE_MIN_PUNCTUATION_LENGTH = 20;
-const LIVE_STAGE_TIMEOUTS_MS = Object.freeze({
-  executor: DEFAULT_EXECUTOR_TIMEOUT_MS,
-  gate: DEFAULT_GATE_TIMEOUT_MS,
-  verify: DEFAULT_VERIFIER_TIMEOUT_MS,
-});
-
-const LIVE_STAGES = Object.freeze([
-  'unit', 'isolate', 'merge', 'executor', 'gate', 'diff', 'verify', 'report',
-]);
 
 function emptyUsage() {
   return { ...EMPTY_USAGE };
@@ -61,7 +42,6 @@ function emptyRun(directory, overrides = {}) {
     eventsPath: null,
     runId: basename(directory),
     title: null,
-    campaignId: null,
     projectPath: null,
     correctsRunId: null,
     state: 'waiting',
@@ -381,7 +361,6 @@ function digestRunDirectory(runDirectory) {
     eventsPath: stream.eventsPath,
     runId: stream.runId,
     title,
-    campaignId: events.find((event) => typeof event.campaignId === 'string')?.campaignId ?? null,
     projectPath: events.find((event) => event.stage === 'isolate' && event.type === 'start'
       && typeof event.source === 'string')?.source ?? null,
     correctsRunId: events.find((event) => event.stage === 'isolate' && event.type === 'start'
@@ -411,108 +390,6 @@ function digestRunDirectory(runDirectory) {
     executorRationale: completedDetails.executorRationale,
     diff: readDiffPreview(worktreeDirectory),
   });
-}
-
-function digestCampaignDirectory(directory) {
-  try {
-    const stream = readCampaignEventStream(directory);
-    const byUnit = new Map();
-    for (const event of stream.events) {
-      if (event.stage !== 'unit' || typeof event.unitId !== 'string') continue;
-      const previous = byUnit.get(event.unitId) ?? {
-        campaignId: stream.campaignId,
-        unitId: event.unitId,
-        unitKind: event.unitKind ?? null,
-        predecessorUnitIds: [],
-      };
-      const predecessors = Array.isArray(event.predecessorUnitIds)
-        ? event.predecessorUnitIds
-        : typeof event.predecessorUnitId === 'string' ? [event.predecessorUnitId] : [];
-      byUnit.set(event.unitId, {
-        ...previous,
-        unitKind: event.unitKind ?? previous.unitKind,
-        currentType: event.type,
-        lastEventTs: event.ts ?? previous.lastEventTs ?? null,
-        predecessorUnitIds: predecessors.length > 0 ? predecessors : previous.predecessorUnitIds,
-      });
-    }
-    return {
-      campaignId: stream.campaignId,
-      directory: stream.directory,
-      units: [...byUnit.values()],
-      message: null,
-    };
-  } catch (error) {
-    return {
-      campaignId: basename(directory),
-      directory,
-      units: [],
-      message: `Cannot read campaign event stream: ${error.message}`,
-    };
-  }
-}
-
-function isTerminalUnitType(type) {
-  return type === 'finish' || type === 'not_dispatched' || type === 'skipped';
-}
-
-export function liveUnitFromRun(run) {
-  const stalled = run.currentType === 'stalled';
-  const timeoutMs = LIVE_STAGE_TIMEOUTS_MS[run.currentStage];
-  const lastEventMs = validTimestamp(run.lastEventTs);
-  const stale = !stalled
-    && run.state !== 'waiting'
-    && timeoutMs !== undefined
-    && lastEventMs !== null
-    && Date.now() - lastEventMs > timeoutMs;
-  return {
-    campaignId: run.campaignId,
-    unitId: run.runId,
-    unitKind: null,
-    status: stalled ? 'stalled'
-      : run.state === 'waiting' ? 'waiting-for-events'
-        : stale ? 'stale' : 'active',
-    statusText: stalled ? 'Stalled — watchdog reported no progress'
-      : run.state === 'waiting' ? 'Waiting for events — not stalled'
-        : stale ? 'Stale — no recent events' : 'Active',
-    currentStage: run.currentStage,
-    currentType: run.currentType,
-    lastEventTs: run.lastEventTs,
-    predecessorUnitIds: [],
-    timeline: run.timeline,
-  };
-}
-
-function buildLiveUnits(runs, campaigns) {
-  const units = new Map();
-  for (const campaign of campaigns) {
-    for (const unit of campaign.units) {
-      if (isTerminalUnitType(unit.currentType)) continue;
-      const key = `${unit.campaignId ?? ''}/${unit.unitId}`;
-      const waiting = unit.currentType === 'waiting';
-      units.set(key, {
-        ...unit,
-        status: waiting ? 'waiting-predecessor' : 'active',
-        statusText: waiting
-          ? `Waiting on predecessor: ${unit.predecessorUnitIds.join(', ') || 'unknown'}`
-          : 'Active',
-        currentStage: 'unit',
-        timeline: [],
-      });
-    }
-  }
-  for (const run of runs) {
-    if (run.state === 'finished' || run.state === 'error') continue;
-    const key = `${run.campaignId ?? ''}/${run.runId}`;
-    const existing = units.get(key);
-    const fromRun = liveUnitFromRun(run);
-    if (existing?.status === 'waiting-predecessor') continue;
-    units.set(key, { ...existing, ...fromRun });
-  }
-  return [...units.values()].sort((left, right) => (
-    (validTimestamp(right.lastEventTs) ?? -1) - (validTimestamp(left.lastEventTs) ?? -1)
-      || right.unitId.localeCompare(left.unitId)
-  ));
 }
 
 export function inferSessions(runs, thresholdHours = DEFAULT_SESSION_THRESHOLD_HOURS) {
@@ -596,10 +473,7 @@ export function buildDashboardSnapshot({ runDirectory, scratchRoot } = {}) {
   if (runDirectory) {
     const sourcePath = resolve(runDirectory);
     const runs = [digestRunDirectory(sourcePath)];
-    return {
-      mode: 'run', sourcePath, observedAt, message: null, campaigns: [], runs,
-      liveUnits: buildLiveUnits(runs, []),
-    };
+    return { mode: 'run', sourcePath, observedAt, message: null, runs };
   }
 
   const sourcePath = resolve(scratchRoot);
@@ -610,7 +484,7 @@ export function buildDashboardSnapshot({ runDirectory, scratchRoot } = {}) {
       return {
         mode: 'scratch', sourcePath, observedAt,
         message: `Scratch root is not a directory: ${sourcePath}`,
-        campaigns: [], runs: [], liveUnits: [],
+        runs: [],
       };
     }
     entries = readdirSync(sourcePath, { withFileTypes: true })
@@ -621,17 +495,16 @@ export function buildDashboardSnapshot({ runDirectory, scratchRoot } = {}) {
       return {
         mode: 'scratch', sourcePath, observedAt,
         message: `Scratch root does not exist yet: ${sourcePath}`,
-        campaigns: [], runs: [], liveUnits: [],
+        runs: [],
       };
     }
     return {
       mode: 'scratch', sourcePath, observedAt,
       message: `Cannot read scratch root: ${error.message}`,
-      campaigns: [], runs: [], liveUnits: [],
+      runs: [],
     };
   }
 
-  const campaigns = [];
   const runs = [];
   for (const entry of entries) {
     const directory = join(sourcePath, entry.name);
@@ -639,20 +512,14 @@ export function buildDashboardSnapshot({ runDirectory, scratchRoot } = {}) {
     const hasCampaignStream = existsSync(campaignPath);
     const hasRunStream = existsSync(join(directory, 'events.jsonl'))
       || existsSync(join(directory, 'w', 'events.jsonl'));
-    if (hasCampaignStream) campaigns.push(digestCampaignDirectory(directory));
     if (!hasCampaignStream || hasRunStream) runs.push(digestRunDirectory(directory));
   }
-  const campaignMessages = campaigns.map((campaign) => campaign.message).filter(Boolean);
   return {
     mode: 'scratch',
     sourcePath,
     observedAt,
-    message: runs.length === 0
-      ? campaignMessages[0] ?? 'No run directories found yet.'
-      : campaignMessages[0] ?? null,
-    campaigns,
+    message: runs.length === 0 ? 'No run directories found yet.' : null,
     runs,
-    liveUnits: buildLiveUnits(runs, campaigns),
   };
 }
 
@@ -919,35 +786,6 @@ function renderTriage(snapshot) {
     + `<div id="sessions">${renderProjects(snapshot.runs, DEFAULT_SESSION_THRESHOLD_HOURS, true)}</div></section>`;
 }
 
-function renderStageBar(unit) {
-  const currentIndex = LIVE_STAGES.indexOf(unit.currentStage);
-  const finished = new Set(unit.timeline
-    .filter((event) => event.type === 'finish')
-    .map((event) => event.stage));
-  return `<ol class="stage-bar" aria-label="Stage bar for ${escapeHtml(unit.unitId)}">${LIVE_STAGES.map((stage, index) => {
-    const kind = stage === unit.currentStage ? 'current'
-      : finished.has(stage) || (currentIndex >= 0 && index < currentIndex) ? 'done' : 'pending';
-    return `<li class="${kind}"><span>${escapeHtml(stage)}</span></li>`;
-  }).join('')}</ol>`;
-}
-
-function renderLive(snapshot) {
-  const rows = snapshot.liveUnits.length === 0
-    ? '<section class="empty">No units are currently in flight.</section>'
-    : snapshot.liveUnits.map((unit) => {
-      const age = unit.lastEventTs === null ? 'no events yet'
-        : formatDuration(Date.now() - Date.parse(unit.lastEventTs));
-      return `<article class="live-unit ${escapeHtml(unit.status)}" data-unit-id="${escapeHtml(unit.unitId)}">`
-        + `<header><div><b>${escapeHtml(unit.unitId)}</b><small>${escapeHtml(unit.unitKind ?? '')}</small></div>`
-        + `<strong>${escapeHtml(unit.statusText)}</strong></header>`
-        + `<div class="current"><span>Current stage</span><strong>${escapeHtml(unit.currentStage ?? 'not started')}</strong>`
-        + `<small>${escapeHtml(unit.currentType ?? '')}</small><span>Last event</span>`
-        + `<strong class="age" data-last-event-ts="${escapeHtml(unit.lastEventTs ?? '')}">${escapeHtml(age)}</strong></div>`
-        + renderStageBar(unit) + '</article>';
-    }).join('');
-  return `<section id="live-view" class="view-panel" data-view-panel="live" hidden>${rows}</section>`;
-}
-
 function renderVerifier(name, verifier) {
   if (verifier === null) {
     return `<div class="verifier pending"><b>${escapeHtml(name)}</b><span>Pending — unknown</span></div>`;
@@ -992,10 +830,20 @@ function renderTimeline(timeline) {
   }).join('')}</ol>`;
 }
 
-export function renderUnifiedDiff(diff) {
+function vscodeFileHref(path) {
+  return `vscode://file/${encodeURIComponent(path)}`;
+}
+
+function renderVsCodeLink(href) {
+  return `<a href="${escapeHtml(href)}">Open in VS Code</a>`;
+}
+
+export function renderUnifiedDiff(diff, openInVsCodeHref = null) {
   if (diff.message !== null) return `<p class="notice">${escapeHtml(diff.message)}</p>`;
+  const completeDiffHref = openInVsCodeHref
+    ?? (typeof diff.path === 'string' ? vscodeFileHref(diff.path) : null);
   const capNotice = diff.capped
-    ? `<p class="diff-capped"><strong>Diff rendering capped.</strong> Showing ${diff.renderedByteCount.toLocaleString('en-US')} of ${diff.byteCount.toLocaleString('en-US')} bytes. Open the worktree in VS Code for the complete diff.</p>`
+    ? `<p class="diff-capped"><strong>Diff rendering capped.</strong> Showing ${diff.renderedByteCount.toLocaleString('en-US')} of ${diff.byteCount.toLocaleString('en-US')} bytes. ${completeDiffHref === null ? 'Open CHANGES.diff in VS Code' : renderVsCodeLink(completeDiffHref)} for the complete diff.</p>`
     : `<p class="muted">${diff.byteCount.toLocaleString('en-US')} bytes.</p>`;
   const lines = diff.text.split(/(?<=\n)/).map((line) => {
     const bare = line.endsWith('\n') ? line.slice(0, -1) : line;
@@ -1034,6 +882,14 @@ export function renderRunDetail(run) {
   const rationale = run.executorRationale
     ?? '(executor rationale is recorded when the run report completes)';
   const vscodeCommand = `code "${run.worktreeDirectory.replaceAll('"', '\\"')}"`;
+  const diffPath = join(run.worktreeDirectory, 'CHANGES.diff');
+  let vscodeTarget = run.worktreeDirectory;
+  try {
+    if (statSync(diffPath).isFile()) vscodeTarget = diffPath;
+  } catch {
+    // No diff is expected for no-op and error runs; open the worktree instead.
+  }
+  const openInVsCodeHref = vscodeFileHref(vscodeTarget);
 
   return `<article class="run-card ${escapeHtml(run.state)}">`
     + `<header><div><h2>${escapeHtml(run.runId)}</h2><p title="${escapeHtml(run.directory)}">`
@@ -1048,8 +904,9 @@ export function renderRunDetail(run) {
     + `<section><h3>Executor rationale</h3><pre class="prose">${escapeHtml(rationale)}</pre></section>`
     + '<section><h3>Open the worktree in VS Code</h3>'
     + `<div class="copy-row"><pre class="command"><code>${escapeHtml(vscodeCommand)}</code></pre>`
-    + `<button type="button" data-copy-command="${escapeHtml(vscodeCommand)}">Copy command</button></div></section>`
-    + '<section><h3>Unified diff</h3>' + renderUnifiedDiff(run.diff) + '</section>'
+    + `<button type="button" data-copy-command="${escapeHtml(vscodeCommand)}">Copy command</button></div>`
+    + `<p>${renderVsCodeLink(openInVsCodeHref)}</p></section>`
+    + '<section><h3>Unified diff</h3>' + renderUnifiedDiff(run.diff, openInVsCodeHref) + '</section>'
     + '<section><h3>Token usage by seat</h3><dl class="tokens">'
     + `<dt>Executor</dt><dd>${escapeHtml(usageText(run.tokens.executor))}</dd>`
     + `<dt>Correctness</dt><dd>${escapeHtml(usageText(run.tokens.correctness))}</dd>`
@@ -1058,34 +915,6 @@ export function renderRunDetail(run) {
     + `<section><h3>Gate commands</h3>${gates}</section>`
     + `<section><h3>Stalls</h3>${stalls}</section>`
     + `<section><h3>Full stage timeline</h3>${renderTimeline(run.timeline)}</section></article>`;
-}
-
-function renderLogEventRow(row) {
-  const event = row.event ?? row;
-  const pair = `${event.stage ?? 'unknown'}/${event.type ?? 'unknown'}`;
-  return '<li class="log-row" data-log-run-id="' + escapeHtml(row.runId ?? '') + '">'
-    + `<time>${escapeHtml(fullTime(event.ts))}</time>`
-    + `<code class="log-run">${escapeHtml(row.runId ?? 'unknown run')}</code>`
-    + `<b>${escapeHtml(pair)}</b><span>${escapeHtml(row.detail ?? '')}</span>`
-    + '<details class="raw-event"><summary>Raw record</summary>'
-    + `<pre>${escapeHtml(JSON.stringify(event, null, 2))}</pre></details></li>`;
-}
-
-export function renderLogRows(rows, { problemsOnly = false } = {}) {
-  if (rows.length === 0) {
-    return problemsOnly
-      ? '<section class="empty">No records need investigation. Turn off problems only to see the clean stream.</section>'
-      : '<section class="empty">No event records are available yet.</section>';
-  }
-  const rendered = rows.map((row) => {
-    if (row.kind !== 'group') return renderLogEventRow(row);
-    const noun = row.count === 1 ? 'event' : 'events';
-    return '<li class="log-collapse"><details data-collapsed-count="' + row.count + '">'
-      + `<summary><strong>${row.count} ${escapeHtml(row.groupType)} ${noun}</strong> collapsed — expand to show every record</summary>`
-      + `<ol class="log-list nested">${row.rows.map(renderLogEventRow).join('')}</ol>`
-      + '</details></li>';
-  }).join('');
-  return `<ol class="log-list">${rendered}</ol>`;
 }
 
 function renderDetail(snapshot) {
@@ -1099,62 +928,13 @@ function renderDetail(snapshot) {
     + `<div id="detail-body">${renderRunDetail(selected)}</div></section>`;
 }
 
-function renderLogs(snapshot) {
-  const options = snapshot.runs.map((run) => (
-    `<option value="${escapeHtml(run.runId)}">${escapeHtml(run.runId)}</option>`
-  )).join('');
-  return '<section id="logs-view" class="view-panel" data-view-panel="logs" hidden>'
-    + '<div class="logs-picker"><label>Run <select id="logs-pass">'
-    + `<option value="all">All runs</option>${options}</select></label>`
-    + '<label class="toggle"><input id="problems-only" type="checkbox"> Problems only</label>'
-    + '<small>Raw records are fetched on demand. Executor item completions stay available in expandable groups.</small></div>'
-    + '<div id="logs-body"><section class="empty">Open Logs to load the event stream.</section></div></section>';
-}
-
-export function renderCampaignGraph(graph) {
-  if (graph.message) return `<section class="empty">${escapeHtml(graph.message)}</section>`;
-  const svg = renderCampaignGraphSvg(graph);
-  return '<div class="graph-key" aria-label="Graph state legend">'
-    + '<span class="not-dispatched">Not yet dispatched</span><span class="waiting">Waiting</span>'
-    + '<span class="running">Running</span><span class="finished">Finished</span>'
-    + '<span class="skipped">Skipped</span><strong>Double border = MERGE</strong></div>'
-    + `<div class="graph-frame">${svg}</div>`;
-}
-
-function renderGraph(snapshot) {
-  if (snapshot.mode === 'run') {
-    return '<section id="graph-view" class="view-panel" data-view-panel="graph" hidden>'
-      + '<section class="empty">A single-run dashboard has no campaign topology to display.</section></section>';
-  }
-  const campaigns = Array.isArray(snapshot.campaigns) ? snapshot.campaigns : [];
-  if (campaigns.length === 0) {
-    return '<section id="graph-view" class="view-panel" data-view-panel="graph" hidden>'
-      + '<section class="empty">No campaigns are available in this scratch root yet.</section></section>';
-  }
-  const options = campaigns.map((campaign, index) => (
-    `<option value="${escapeHtml(campaign.campaignId)}"${index === 0 ? ' selected' : ''}>`
-      + `${escapeHtml(campaign.campaignId)}</option>`
-  )).join('');
-  const picker = campaigns.length > 1
-    ? '<div class="graph-picker"><label>Campaign <select id="graph-campaign">'
-      + `${options}</select></label><small>Choose one campaign topology.</small></div>`
-    : `<input id="graph-campaign" type="hidden" value="${escapeHtml(campaigns[0].campaignId)}">`;
-  return '<section id="graph-view" class="view-panel" data-view-panel="graph" hidden>'
-    + picker
-    + '<div id="graph-body"><section class="empty">Open Graph to load the campaign topology.</section></div>'
-    + '</section>';
-}
-
 export function renderDashboardContent(snapshot) {
   const message = snapshot.message ? `<section class="empty source-message">${escapeHtml(snapshot.message)}</section>` : '';
   return `${message}<nav class="view-tabs" aria-label="Dashboard views">`
     + '<button type="button" data-view="triage" aria-pressed="true">Triage</button>'
-    + '<button type="button" data-view="live" aria-pressed="false">Live</button>'
     + '<button type="button" data-view="detail" aria-pressed="false">Detail</button>'
-    + '<button type="button" data-view="logs" aria-pressed="false">Logs</button>'
-    + '<button type="button" data-view="graph" aria-pressed="false">Graph</button></nav>'
-    + renderTriage(snapshot) + renderLive(snapshot) + renderDetail(snapshot)
-    + renderLogs(snapshot) + renderGraph(snapshot);
+    + '</nav>'
+    + renderTriage(snapshot) + renderDetail(snapshot);
 }
 
 export function snapshotForClient(snapshot) {
@@ -1163,7 +943,6 @@ export function snapshotForClient(snapshot) {
     sourcePath: snapshot.sourcePath,
     observedAt: snapshot.observedAt,
     message: snapshot.message,
-    liveUnits: snapshot.liveUnits,
     runs: snapshot.runs.map((run) => ({
       runId: run.runId,
       title: run.title,
@@ -1197,7 +976,7 @@ function clientScript() {
 const connection=document.getElementById('connection');
 const root=document.getElementById('runs');
 const DEFAULT_SESSION_GAP_HOURS=${DEFAULT_SESSION_THRESHOLD_HOURS};
-const state={snapshot:JSON.parse(document.getElementById('initial-dashboard-data').textContent),view:'triage',attentionOnly:true,detailRunId:null,logsRunId:'all',logsProblemsOnly:false,graphCampaignId:null};
+const state={snapshot:JSON.parse(document.getElementById('initial-dashboard-data').textContent),view:'triage',attentionOnly:true,detailRunId:null};
 function esc(value){return String(value==null?'':value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;')}
 function duration(ms){ms=Math.max(0,Math.floor(ms));if(ms<1000)return ms+' ms';const s=Math.floor(ms/1000);if(s<60)return s+'s';const m=Math.floor(s/60);if(m<60)return m+'m '+(s%60)+'s';return Math.floor(m/60)+'h '+(m%60)+'m'}
 function timeMs(value){const parsed=typeof value==='string'?Date.parse(value):NaN;return Number.isFinite(parsed)?parsed:null}
@@ -1213,19 +992,14 @@ function correctionRows(sessionRuns,allRuns){const allById=new Map((allRuns||ses
 function passRow(item){const run=item.run||item;const depth=item.depth||0;const hidden=state.attentionOnly&&!run.needsAttention?' hidden':'';const count=run.filesChanged.length;const files=count+' '+(count===1?'file':'files');const short='<code title="'+esc(run.runId)+'">'+esc(shortId(run.runId))+'</code>';const correction=typeof run.correctsRunId==='string'?'<small class="correction-note">corrects <code title="'+esc(run.correctsRunId)+'">'+esc(shortId(run.correctsRunId))+'</code></small>':'';const identity=run.title?'<span class="pass-identity"><b title="'+esc(run.title)+'">'+esc(run.title)+'</b><small>'+short+'</small>'+correction+'</span>':correction?'<span class="pass-identity">'+short+correction+'</span>':short;return'<tr class="pass-row '+(run.needsAttention?'attention':'clean')+'" data-client-run-id="'+esc(run.runId)+'" data-correction-depth="'+depth+'" data-needs-attention="'+run.needsAttention+'" style="--correction-depth:'+depth+'"'+hidden+'><td><button class="pass-detail" type="button" data-detail-run="'+esc(run.runId)+'">'+esc(shortTime(run.startTs))+'</button></td><td>'+identity+'</td><td>'+resultCell('gate',run.triage.gate)+'</td><td>'+resultCell('correctness',run.triage.correctness)+'</td><td>'+resultCell('intent',run.triage.intent)+'</td><td title="'+esc(run.filesChanged.join(', '))+'">'+esc(files)+'</td></tr>'}
 function renderSessionGroups(runs,allRuns){const groups=sessions(runs,DEFAULT_SESSION_GAP_HOURS);if(!groups.length)return'<section class="empty">No passes to group into sessions.</section>';const allFiltered=state.attentionOnly&&groups.every(function(group){return group.attentionCount===0});const message=allFiltered?'<section class="empty filter-empty">No passes need attention. Turn off the filter to see clean passes.</section>':'';return message+groups.map(function(group){const hidden=state.attentionOnly&&group.attentionCount===0?' hidden':'';const title=group.runs[0]&&group.runs[0].title||null;const different=title===null?0:group.runs.slice(1).filter(function(run){return run.title!=null&&run.title!==title}).length;const headline=title===null?fullTime(group.startTs):title+(different>0?' +'+different+' more':'');return'<details class="session" data-attention-count="'+group.attentionCount+'"'+hidden+'><summary><span><b'+(title===null?'':' title="'+esc(headline)+'"')+'>'+esc(headline)+'</b><small>'+esc(fullTime(group.startTs))+' · '+esc(duration(group.durationMs))+'</small></span><span>'+group.runs.length+' '+(group.runs.length===1?'pass':'passes')+'</span><strong>'+group.attentionCount+' need'+(group.attentionCount===1?'s':'')+' attention</strong></summary><div class="pass-table-wrap"><table class="passes"><thead><tr><th>Time</th><th>Pass</th><th>Gate</th><th>Correctness</th><th>Intent</th><th>Files changed</th></tr></thead><tbody>'+correctionRows(group.runs,allRuns||runs).map(passRow).join('')+'</tbody></table></div></details>'}).join('')}
 function renderSessions(){const target=document.getElementById('sessions');if(!target)return;const groups=projects(state.snapshot.runs);if(groups.length<=1){target.innerHTML=renderSessionGroups(state.snapshot.runs,state.snapshot.runs);return}const allFiltered=state.attentionOnly&&groups.every(function(group){return group.attentionCount===0});const message=allFiltered?'<section class="empty filter-empty">No passes need attention. Turn off the filter to see clean passes.</section>':'';target.innerHTML=message+groups.map(function(group){const hidden=state.attentionOnly&&group.attentionCount===0?' hidden':'';const subtitle=group.projectPath===null?'Unknown project':group.projectPath;return'<details class="project" data-project-path="'+esc(group.projectPath===null?'':group.projectPath)+'" data-attention-count="'+group.attentionCount+'"'+hidden+'><summary><span><b>'+esc(group.name)+'</b><small>'+esc(subtitle)+'</small></span><span>'+group.runs.length+' '+(group.runs.length===1?'pass':'passes')+'</span><strong>'+group.attentionCount+' need'+(group.attentionCount===1?'s':'')+' attention</strong></summary><div class="project-sessions">'+renderSessionGroups(group.runs,state.snapshot.runs)+'</div></details>'}).join('')}
-function stageBar(unit){const stages=['unit','isolate','merge','executor','gate','diff','verify','report'];const current=stages.indexOf(unit.currentStage);const finished=new Set(unit.timeline.filter(function(event){return event.type==='finish'}).map(function(event){return event.stage}));return'<ol class="stage-bar" aria-label="Stage bar for '+esc(unit.unitId)+'">'+stages.map(function(stage,index){const kind=stage===unit.currentStage?'current':finished.has(stage)||(current>=0&&index<current)?'done':'pending';return'<li class="'+kind+'"><span>'+esc(stage)+'</span></li>'}).join('')+'</ol>'}
-function renderLive(){const target=document.getElementById('live-view');if(!target)return;if(!state.snapshot.liveUnits.length){target.innerHTML='<section class="empty">No units are currently in flight.</section>';return}target.innerHTML=state.snapshot.liveUnits.map(function(unit){const age=unit.lastEventTs===null?'no events yet':duration(Date.now()-Date.parse(unit.lastEventTs));return'<article class="live-unit '+esc(unit.status)+'" data-unit-id="'+esc(unit.unitId)+'"><header><div><b>'+esc(unit.unitId)+'</b><small>'+esc(unit.unitKind||'')+'</small></div><strong>'+esc(unit.statusText)+'</strong></header><div class="current"><span>Current stage</span><strong>'+esc(unit.currentStage||'not started')+'</strong><small>'+esc(unit.currentType||'')+'</small><span>Last event</span><strong class="age" data-last-event-ts="'+esc(unit.lastEventTs||'')+'">'+esc(age)+'</strong></div>'+stageBar(unit)+'</article>'}).join('')}
 function refreshAges(){document.querySelectorAll('[data-last-event-ts]').forEach(function(el){const ts=Date.parse(el.dataset.lastEventTs);if(Number.isFinite(ts))el.textContent=duration(Date.now()-ts)})}
-function switchView(view){state.view=view;document.querySelectorAll('[data-view-panel]').forEach(function(panel){panel.hidden=panel.dataset.viewPanel!==view});document.querySelectorAll('[data-view]').forEach(function(button){button.setAttribute('aria-pressed',String(button.dataset.view===view))});if(view==='detail')refreshDetail();if(view==='logs')refreshLogs();if(view==='graph')refreshGraph()}
+function switchView(view){state.view=view;document.querySelectorAll('[data-view-panel]').forEach(function(panel){panel.hidden=panel.dataset.viewPanel!==view});document.querySelectorAll('[data-view]').forEach(function(button){button.setAttribute('aria-pressed',String(button.dataset.view===view))});if(view==='detail')refreshDetail()}
 async function refreshDetail(){const target=document.getElementById('detail-body');const select=document.getElementById('detail-pass');if(!target||!select||!select.value){if(target)target.innerHTML='<section class="empty">Select a pass to inspect its details.</section>';return}state.detailRunId=select.value;target.setAttribute('aria-busy','true');try{const response=await fetch('/detail?runId='+encodeURIComponent(state.detailRunId),{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That pass is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load pass detail: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy');refreshAges()}}
 function syncDetailOptions(){const select=document.getElementById('detail-pass');if(!select)return;const wanted=state.detailRunId;select.innerHTML=state.snapshot.runs.map(function(run){return'<option value="'+esc(run.runId)+'">'+esc(run.runId)+'</option>'}).join('');if(wanted&&state.snapshot.runs.some(function(run){return run.runId===wanted}))select.value=wanted;state.detailRunId=select.value||null}
-async function refreshLogs(){const target=document.getElementById('logs-body');const select=document.getElementById('logs-pass');if(!target||!select)return;state.logsRunId=select.value||'all';const filter=document.getElementById('problems-only');state.logsProblemsOnly=Boolean(filter&&filter.checked);target.setAttribute('aria-busy','true');try{const query='?runId='+encodeURIComponent(state.logsRunId)+'&problemsOnly='+state.logsProblemsOnly;const response=await fetch('/logs'+query,{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That pass is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load logs: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy')}}
-function syncLogOptions(){const select=document.getElementById('logs-pass');if(!select)return;const wanted=state.logsRunId;select.innerHTML='<option value="all">All runs</option>'+state.snapshot.runs.map(function(run){return'<option value="'+esc(run.runId)+'">'+esc(run.runId)+'</option>'}).join('');if(wanted==='all'||state.snapshot.runs.some(function(run){return run.runId===wanted}))select.value=wanted;else state.logsRunId=select.value='all'}
-async function refreshGraph(){const target=document.getElementById('graph-body');const select=document.getElementById('graph-campaign');if(!target||!select||!select.value)return;state.graphCampaignId=select.value;target.setAttribute('aria-busy','true');try{const response=await fetch('/graph?campaignId='+encodeURIComponent(state.graphCampaignId),{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That campaign is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load campaign graph: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy')}}
-function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}const copyButton=event.target.closest('[data-copy-command]');if(copyButton&&navigator.clipboard){navigator.clipboard.writeText(copyButton.dataset.copyCommand).then(function(){copyButton.textContent='Copied'}).catch(function(){copyButton.textContent='Select and copy the command'})}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}if(event.target.id==='logs-pass'||event.target.id==='problems-only')refreshLogs();if(event.target.id==='graph-campaign')refreshGraph()})}
+function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}const copyButton=event.target.closest('[data-copy-command]');if(copyButton&&navigator.clipboard){navigator.clipboard.writeText(copyButton.dataset.copyCommand).then(function(){copyButton.textContent='Copied'}).catch(function(){copyButton.textContent='Select and copy the command'})}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}})}
 bind();
 const stream=new EventSource('/events');
-stream.addEventListener('snapshot',function(event){state.snapshot=JSON.parse(event.data).snapshot;renderSessions();renderLive();syncDetailOptions();syncLogOptions();if(state.view==='detail')refreshDetail();if(state.view==='logs')refreshLogs();if(state.view==='graph')refreshGraph();connection.textContent='Live';refreshAges()});
+stream.addEventListener('snapshot',function(event){state.snapshot=JSON.parse(event.data).snapshot;renderSessions();syncDetailOptions();if(state.view==='detail')refreshDetail();connection.textContent='Live';refreshAges()});
 stream.onopen=function(){connection.textContent='Live'};
 stream.onerror=function(){connection.textContent='Reconnecting…'};
 setInterval(refreshAges,1000);refreshAges();
@@ -1240,10 +1014,91 @@ export function renderDashboardPage(snapshot) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CCC run dashboard</title>
 <style>
-:root{color-scheme:light dark;--bg:#f4f5f2;--card:#fff;--ink:#18201d;--muted:#65716b;--line:#d9dedb;--ok:#197047;--warn:#9c5a08;--bad:#a32828;--stale:#6b4fb3;--soft:#eef1ef;--add:#e7f6ed;--remove:#fdeaea}
-@media(prefers-color-scheme:dark){:root{--bg:#111513;--card:#19201d;--ink:#edf2ef;--muted:#a5b0aa;--line:#35403a;--soft:#222b27;--ok:#6ed39e;--warn:#f0ae59;--bad:#ff8b8b;--stale:#c2a7ff;--add:#183c2a;--remove:#472121}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}body>header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:end;justify-content:space-between}h1{font-size:1.15rem;margin:0}body>header p{margin:.15rem 0 0;color:var(--muted);word-break:break-all}.connection{white-space:nowrap;color:var(--ok)}main{display:flex;flex-direction:column;gap:1rem;padding:1rem;min-height:calc(100vh - 70px);max-width:1500px;margin:0 auto;width:100%}button,select,input{font:inherit}.view-tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line)}.view-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:.55rem .9rem;cursor:pointer}.view-tabs button[aria-pressed="true"]{color:var(--ink);border-color:var(--ink);font-weight:700}.controls,.detail-picker,.logs-picker,.graph-picker{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:.75rem;display:flex;align-items:center;gap:.7rem 1.2rem;flex-wrap:wrap}.controls small,.detail-picker small,.logs-picker small,.graph-picker small{color:var(--muted);flex:1}.toggle{white-space:nowrap}.empty,.notice{padding:.7rem;background:var(--soft);border-radius:5px}.source-message{margin-bottom:0}.project,.session{background:var(--card);border:1px solid var(--line);border-radius:7px;margin:.7rem 0;overflow:hidden}.project>summary,.session>summary{cursor:pointer;display:grid;grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:1rem;padding:.8rem 1rem}.project>summary span:first-child,.session>summary span:first-child{display:flex;flex-direction:column}.project>summary small,.session>summary small{color:var(--muted)}.project>summary strong,.session>summary strong{color:var(--bad)}.project-sessions{border-top:1px solid var(--line);padding:0 .7rem .05rem}.pass-table-wrap{overflow-x:auto;border-top:1px solid var(--line)}.passes{width:100%;border-collapse:collapse;min-width:950px}.passes th,.passes td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}.passes th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}.pass-detail{border:0;background:transparent;color:inherit;text-decoration:underline;cursor:pointer;padding:0}.pass-row>td:nth-child(2){padding-left:calc(.7rem + var(--correction-depth)*1.25rem)}.pass-identity{display:flex;flex-direction:column}.pass-identity small{color:var(--muted)}.correction-note{font-weight:600}.result{display:inline-block;font-size:.78rem;font-weight:650}.result.clean{color:var(--ok)}.result.issues{color:var(--bad)}.result.unknown{color:var(--warn)}.result.pending{color:var(--muted)}.live-unit,.run-card{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--warn);border-radius:7px;padding:1rem;margin:.7rem 0}.live-unit.stalled{border-top-color:var(--bad)}.live-unit.stale{border-top-color:var(--stale)}.live-unit.waiting-predecessor{border-top-color:var(--warn)}.live-unit>header,.run-card>header{display:flex;justify-content:space-between;gap:.8rem}.live-unit header div{display:flex;gap:.6rem}.live-unit header small{color:var(--muted)}.live-unit header>strong{font-size:.8rem}.live-unit.stale header>strong{color:var(--stale)}.run-card.finished{border-top-color:var(--ok)}.run-card.error{border-top-color:var(--bad)}.run-card h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.run-card header p{font-size:.72rem;color:var(--muted);margin:.2rem 0;overflow-wrap:anywhere}.state{border:1px solid currentColor;border-radius:999px;padding:.15rem .55rem;height:max-content;font-size:.75rem}.state.finished{color:var(--ok)}.state.error{color:var(--bad)}.state.running{color:var(--warn)}.current{display:grid;grid-template-columns:auto 1fr;gap:.2rem .65rem;background:var(--soft);padding:.7rem;margin:.8rem 0;border-radius:5px}.current span{color:var(--muted)}.current small{grid-column:2;color:var(--muted)}.stage-bar{display:grid;grid-template-columns:repeat(8,1fr);list-style:none;margin:.7rem 0 0;padding:0;gap:3px}.stage-bar li{height:.55rem;background:var(--line);position:relative}.stage-bar li.done{background:var(--ok)}.stage-bar li.current{background:var(--warn)}.stage-bar span{position:absolute;top:.65rem;font-size:.62rem;color:var(--muted);left:0}.stage-bar{margin-bottom:1.2rem}.run-card section{margin-top:1rem}h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .45rem}.verifier{display:grid;grid-template-columns:1fr auto;gap:.1rem .6rem;border-left:3px solid var(--line);padding:.45rem .6rem;margin:.35rem 0;background:var(--soft)}.verifier span,.verifier em{font-size:.75rem;color:var(--muted)}.verifier em{grid-column:1/-1}.verifier.fail-safe{border-color:var(--warn)}.verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}.verifier-findings{grid-column:1/-1;margin-top:.35rem}.verifier-findings h4{font-size:.75rem;margin:.15rem 0}.verifier-findings pre,.prose,.command{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.command{white-space:pre;overflow:auto;flex:1}.copy-row{display:flex;align-items:start;gap:.5rem}.copy-row button{margin-top:.2rem}.tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}.tokens dt{font-weight:650}.tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}.rows,.stalls{list-style:none;margin:0;padding:0}.rows li,.stalls li{display:flex;justify-content:space-between;gap:.7rem;border-top:1px solid var(--line);padding:.35rem 0}.rows code{overflow-wrap:anywhere}.rows span{white-space:nowrap;color:var(--muted)}.exit-ok{color:var(--ok)!important}.exit-fail{color:var(--bad)!important}.stalls li{justify-content:flex-start;color:var(--bad)}.timeline{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto}.timeline li{display:grid;grid-template-columns:4.8rem 5.5rem 1fr;gap:.35rem;border-left:2px solid var(--line);padding:.25rem .5rem}.timeline time,.timeline span,.timeline small{color:var(--muted)}.timeline small{grid-column:2/-1}.log-list{list-style:none;margin:.7rem 0;padding:0;background:var(--card);border:1px solid var(--line);border-radius:7px;overflow:hidden}.log-list.nested{margin:.55rem 0 0;border-radius:4px}.log-row{display:grid;grid-template-columns:12rem minmax(9rem,auto) minmax(10rem,auto) 1fr;gap:.25rem .7rem;padding:.55rem .7rem;border-top:1px solid var(--line);align-items:start}.log-row:first-child{border-top:0}.log-row time,.log-row span{color:var(--muted)}.log-run{overflow-wrap:anywhere}.raw-event{grid-column:1/-1}.raw-event summary,.log-collapse summary{cursor:pointer}.raw-event pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:.55rem;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}.log-collapse{padding:.55rem .7rem;border-top:1px solid var(--line)}.diff-capped{padding:.6rem;background:var(--soft);border-left:3px solid var(--warn)}.diff{margin:.35rem 0;max-height:65vh;overflow:auto;border:1px solid var(--line);background:var(--card);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.diff-line{display:block;min-height:1.5em;padding:0 .5rem;white-space:pre}.diff-add{background:var(--add);color:var(--ok)}.diff-remove{background:var(--remove);color:var(--bad)}.diff-hunk{color:var(--warn)}.graph-key{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:.7rem 0}.graph-key span,.graph-key strong{border:1px solid var(--line);border-radius:999px;padding:.2rem .55rem;font-size:.75rem}.graph-key .waiting,.graph-key .running{border-color:var(--warn)}.graph-key .finished{border-color:var(--ok)}.graph-key .skipped{border-color:var(--bad)}.graph-frame{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:7px;min-height:240px}.campaign-graph{display:block;min-width:100%;height:auto}.graph-edge{fill:none;stroke:var(--muted);stroke-width:2;marker-end:url(#graph-arrow)}#graph-arrow path{fill:var(--muted)}.graph-node rect{fill:var(--card);stroke:var(--line);stroke-width:2}.graph-node.state-waiting rect,.graph-node.state-running rect{stroke:var(--warn)}.graph-node.state-finished rect{stroke:var(--ok)}.graph-node.state-skipped rect{stroke:var(--bad)}.graph-node.merge-unit>rect:first-of-type{stroke:var(--bad);stroke-width:4}.graph-node .merge-outline{fill:none;stroke:var(--bad);stroke-width:1.5}.graph-node-title{font-weight:700;font-size:13px;fill:var(--ink)}.graph-node-line{font-size:11px;fill:var(--muted)}
-@media(max-width:700px){body>header{align-items:start;flex-direction:column}main{padding:.5rem}.project>summary,.session>summary{grid-template-columns:1fr}.controls,.logs-picker,.graph-picker{align-items:start;flex-direction:column}.stage-bar span{display:none}.stage-bar{margin-bottom:0}.log-row{grid-template-columns:1fr}.raw-event{grid-column:1}}
+:root{color-scheme:light dark;--bg:#f4f5f2;--card:#fff;--ink:#18201d;--muted:#65716b;--line:#d9dedb;--ok:#197047;--warn:#9c5a08;--bad:#a32828;--soft:#eef1ef;--add:#e7f6ed;--remove:#fdeaea}
+@media(prefers-color-scheme:dark){:root{--bg:#111513;--card:#19201d;--ink:#edf2ef;--muted:#a5b0aa;--line:#35403a;--soft:#222b27;--ok:#6ed39e;--warn:#f0ae59;--bad:#ff8b8b;--add:#183c2a;--remove:#472121}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
+body>header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:end;justify-content:space-between}
+h1{font-size:1.15rem;margin:0}
+body>header p{margin:.15rem 0 0;color:var(--muted);word-break:break-all}
+.connection{white-space:nowrap;color:var(--ok)}
+main{display:flex;flex-direction:column;gap:1rem;padding:1rem;min-height:calc(100vh - 70px);max-width:1500px;margin:0 auto;width:100%}
+button,select,input{font:inherit}
+.view-tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line)}
+.view-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:.55rem .9rem;cursor:pointer}
+.view-tabs button[aria-pressed="true"]{color:var(--ink);border-color:var(--ink);font-weight:700}
+.controls,.detail-picker{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:.75rem;display:flex;align-items:center;gap:.7rem 1.2rem;flex-wrap:wrap}
+.controls small,.detail-picker small{color:var(--muted);flex:1}
+.toggle{white-space:nowrap}
+.empty,.notice{padding:.7rem;background:var(--soft);border-radius:5px}
+.source-message{margin-bottom:0}
+.project,.session{background:var(--card);border:1px solid var(--line);border-radius:7px;margin:.7rem 0;overflow:hidden}
+.project>summary,.session>summary{cursor:pointer;display:grid;grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:1rem;padding:.8rem 1rem}
+.project>summary span:first-child,.session>summary span:first-child{display:flex;flex-direction:column}
+.project>summary small,.session>summary small{color:var(--muted)}
+.project>summary strong,.session>summary strong{color:var(--bad)}
+.project-sessions{border-top:1px solid var(--line);padding:0 .7rem .05rem}
+.pass-table-wrap{overflow-x:auto;border-top:1px solid var(--line)}
+.passes{width:100%;border-collapse:collapse;min-width:950px}
+.passes th,.passes td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}
+.passes th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+.pass-detail{border:0;background:transparent;color:inherit;text-decoration:underline;cursor:pointer;padding:0}
+.pass-row>td:nth-child(2){padding-left:calc(.7rem + var(--correction-depth)*1.25rem)}
+.pass-identity{display:flex;flex-direction:column}
+.pass-identity small{color:var(--muted)}
+.correction-note{font-weight:600}
+.result{display:inline-block;font-size:.78rem;font-weight:650}
+.result.clean{color:var(--ok)}
+.result.issues{color:var(--bad)}
+.result.unknown{color:var(--warn)}
+.result.pending{color:var(--muted)}
+.run-card{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--warn);border-radius:7px;padding:1rem;margin:.7rem 0}
+.run-card>header{display:flex;justify-content:space-between;gap:.8rem}
+.run-card.finished{border-top-color:var(--ok)}
+.run-card.error{border-top-color:var(--bad)}
+.run-card h2{font-size:1rem;margin:0;overflow-wrap:anywhere}
+.run-card header p{font-size:.72rem;color:var(--muted);margin:.2rem 0;overflow-wrap:anywhere}
+.state{border:1px solid currentColor;border-radius:999px;padding:.15rem .55rem;height:max-content;font-size:.75rem}
+.state.finished{color:var(--ok)}
+.state.error{color:var(--bad)}
+.state.running{color:var(--warn)}
+.current{display:grid;grid-template-columns:auto 1fr;gap:.2rem .65rem;background:var(--soft);padding:.7rem;margin:.8rem 0;border-radius:5px}
+.current span{color:var(--muted)}
+.current small{grid-column:2;color:var(--muted)}
+.run-card section{margin-top:1rem}
+h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .45rem}
+.verifier{display:grid;grid-template-columns:1fr auto;gap:.1rem .6rem;border-left:3px solid var(--line);padding:.45rem .6rem;margin:.35rem 0;background:var(--soft)}
+.verifier span,.verifier em{font-size:.75rem;color:var(--muted)}
+.verifier em{grid-column:1/-1}
+.verifier.fail-safe{border-color:var(--warn)}
+.verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}
+.verifier-findings{grid-column:1/-1;margin-top:.35rem}
+.verifier-findings h4{font-size:.75rem;margin:.15rem 0}
+.verifier-findings pre,.prose,.command{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
+.command{white-space:pre;overflow:auto;flex:1}
+.copy-row{display:flex;align-items:start;gap:.5rem}
+.copy-row button{margin-top:.2rem}
+.tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}
+.tokens dt{font-weight:650}
+.tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}
+.rows,.stalls{list-style:none;margin:0;padding:0}
+.rows li,.stalls li{display:flex;justify-content:space-between;gap:.7rem;border-top:1px solid var(--line);padding:.35rem 0}
+.rows code{overflow-wrap:anywhere}
+.rows span{white-space:nowrap;color:var(--muted)}
+.exit-ok{color:var(--ok)!important}
+.exit-fail{color:var(--bad)!important}
+.stalls li{justify-content:flex-start;color:var(--bad)}
+.timeline{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto}
+.timeline li{display:grid;grid-template-columns:4.8rem 5.5rem 1fr;gap:.35rem;border-left:2px solid var(--line);padding:.25rem .5rem}
+.timeline time,.timeline span,.timeline small{color:var(--muted)}
+.timeline small{grid-column:2/-1}
+.diff-capped{padding:.6rem;background:var(--soft);border-left:3px solid var(--warn)}
+.diff{margin:.35rem 0;max-height:65vh;overflow:auto;border:1px solid var(--line);background:var(--card);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+.diff-line{display:block;min-height:1.5em;padding:0 .5rem;white-space:pre}
+.diff-add{background:var(--add);color:var(--ok)}
+.diff-remove{background:var(--remove);color:var(--bad)}
+.diff-hunk{color:var(--warn)}
+@media(max-width:700px){body>header{align-items:start;flex-direction:column}main{padding:.5rem}.project>summary,.session>summary{grid-template-columns:1fr}.controls{align-items:start;flex-direction:column}}
 </style>
 </head>
 <body>
