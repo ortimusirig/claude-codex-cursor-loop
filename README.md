@@ -15,11 +15,40 @@ Run these two commands inside Claude Code (not a terminal):
 
 No clone or local installer is needed to use the plugin.
 
+## First run
+
+Then run this, also inside Claude Code:
+
+```text
+/c-cube-loop:setup
+```
+
+`setup` is the guided path. It checks everything the loop needs, offers to install what it
+safely can — showing you the exact command and asking first — walks you through the two
+sign-ins, then scaffolds a throwaway demo project and executes one real pass against it. You
+finish having watched an isolated worktree, a green gate, a verifier verdict and a real diff,
+rather than having ticked off a checklist. The demo is written under the scratch root, never
+into a project of yours.
+
+Re-running `setup` is safe: it re-checks and skips whatever is already green.
+
+**Two things nothing can do for you: signing in to Codex, and signing in to Cursor.** Both
+are interactive browser flows owned by those CLIs. `setup` tells you exactly when to do them
+and re-checks until they pass.
+
+If you would rather look before anything touches your machine, `/c-cube-loop:doctor` runs the
+same checks, changes nothing, and spends no agent tokens. Add `--fix` to have it offer the
+same consented installs, or `--deep` to spend a few tokens proving the signed-in Codex CLI
+can actually write and the signed-in Cursor CLI can actually read.
+
 ## What you need
 
-**Node 24+, git, the Codex CLI, and the Cursor Agent CLI are required. Codex and Cursor
-must each be signed in with its own account.** The Cursor binary is `agent`, not
-`cursor-agent`.
+**Node 24+, git, the Codex CLI, and the Cursor Agent CLI, with Codex and Cursor each signed
+in under its own account.** `setup` and `doctor` check all of these and name what is missing,
+so you should not need this section — it is here for doing it yourself, or for when something
+went wrong.
+
+One detail that catches people out: the Cursor binary is `agent`, not `cursor-agent`.
 
 Install the Cursor Agent CLI on Windows from PowerShell:
 
@@ -35,11 +64,10 @@ curl https://cursor.com/install -fsS | bash
 
 Reopen the terminal after installing, confirm the binary is `agent`, and run `agent login`.
 
-No installer can perform those sign-ins: they are interactive browser flows owned by each
-CLI. Plain `doctor` reports which required programs are missing, gives the exact fix for each,
-and verifies both sign-ins with free local status commands; it spends no agent tokens.
-`doctor --deep` spends a small number of agent tokens to verify that the signed-in Codex CLI
-can write and the signed-in Cursor CLI can read.
+A freshly installed CLI is not visible to an already-running process, so a check can still
+report it missing immediately after a successful install. That is why `setup` reports
+**restart required** for that case instead of treating it as a failure — restart the terminal
+and run `setup` again.
 
 **Everything else is optional.** GitHub publishing, Logdy, and the offline Obsidian journal
 are separate add-ons. A machine with none of them has a fully working loop.
