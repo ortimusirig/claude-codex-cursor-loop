@@ -10,6 +10,7 @@ import {
 import { join, resolve } from 'node:path';
 
 export const PLAN_TEMPLATE = `# Task
+Title: <one-line summary for the dashboard>
 
 Describe the user-visible outcome and why it matters.
 
@@ -96,4 +97,3 @@ export function scaffold(directory) {
   writePairWithoutOverwrite(planPath, gatePath, gateText);
   return { directory: destination, planPath, gatePath };
 }
-

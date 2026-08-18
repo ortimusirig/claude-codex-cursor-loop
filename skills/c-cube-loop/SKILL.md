@@ -191,6 +191,9 @@ Before invoking the loop, check the plan:
   absent” assertion with a positive control proving the check could have seen X.
 - **Does any test depend on where it runs?** The gate runs in a full isolated checkout at a
   scratch path. Avoid tests derived from `process.cwd()` or the checkout location.
+- **Does the plan declare a dashboard title?** Add a `Title: <short summary>` line directly after
+  the `# Task` heading. The dashboard displays it in place of an inferred title; when it is absent,
+  the dashboard falls back to a less reliable heuristic.
 - **Are invariants explicit?** State what must remain true, not only the implementation steps.
   The intent verifier reads `TASK.md`, so written invariants become checkable.
 - **Is out of scope explicit?** State what must not change so the diff stays reviewable.

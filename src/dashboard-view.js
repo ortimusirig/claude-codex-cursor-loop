@@ -25,7 +25,8 @@ import {
 export const DEFAULT_SESSION_THRESHOLD_HOURS = 2;
 export const MAX_RENDERED_DIFF_BYTES = 128 * 1024;
 
-const TASK_TITLE_MAX_LENGTH = 90;
+const TASK_TITLE_MAX_LENGTH = 70;
+const TASK_TITLE_MIN_PUNCTUATION_LENGTH = 20;
 const LIVE_STAGE_TIMEOUTS_MS = Object.freeze({
   executor: DEFAULT_EXECUTOR_TIMEOUT_MS,
   gate: DEFAULT_GATE_TIMEOUT_MS,
@@ -242,9 +243,31 @@ export function extractTaskTitle(text) {
   let index = lines[0] === '# Task' ? 1 : 0;
   while (index < lines.length && lines[index].trim() === '') index += 1;
   if (index === lines.length) return null;
-  const title = lines[index].trim();
+
+  const explicitTitle = /^Title:\s*(.+)$/.exec(lines[index]);
+  const candidate = explicitTitle ? explicitTitle[1] : lines[index];
+  const title = candidate
+    .replaceAll('`', '')
+    .replace(/^#+(?:\s*Task\s*[:—-])?\s+/, '')
+    .trim();
+  if (title === '') return null;
   if (title.length <= TASK_TITLE_MAX_LENGTH) return title;
-  return `${title.slice(0, TASK_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
+
+  const contentLimit = TASK_TITLE_MAX_LENGTH - 1;
+  for (let punctuationIndex = contentLimit - 1;
+    punctuationIndex >= TASK_TITLE_MIN_PUNCTUATION_LENGTH - 1;
+    punctuationIndex--) {
+    if (/[.:;—]/.test(title[punctuationIndex])) {
+      return `${title.slice(0, punctuationIndex + 1).trimEnd()}…`;
+    }
+  }
+
+  let wordBoundary = contentLimit;
+  while (wordBoundary > 0 && !/\s/.test(title[wordBoundary])) wordBoundary -= 1;
+  const truncated = wordBoundary > 0
+    ? title.slice(0, wordBoundary).trimEnd()
+    : title.slice(0, contentLimit).trimEnd();
+  return `${truncated}…`;
 }
 
 function readTaskTitle(directory) {

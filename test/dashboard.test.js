@@ -162,7 +162,56 @@ test('TASK.md title extraction skips boilerplate and handles empty and long plan
   assert.equal(extractTaskTitle(''), null);
 
   const longLine = 'x'.repeat(120);
-  assert.equal(extractTaskTitle(`# Task\n\n${longLine}\n`), `${'x'.repeat(89)}…`);
+  assert.equal(extractTaskTitle(`# Task\n\n${longLine}\n`), `${'x'.repeat(69)}…`);
+});
+
+test('an explicit TASK.md title takes precedence over differing body prose', () => {
+  const body = 'Heuristic body prose that must only appear without an explicit title';
+  const explicitPlan = `# Task\n\nTitle: Dashboard-ready summary\n\n${body}\n`;
+  const extracted = extractTaskTitle(explicitPlan);
+  assert.equal(extracted, 'Dashboard-ready summary');
+  assert.doesNotMatch(extracted, /Heuristic body prose/,
+    'body prose must not be consulted after an explicit title is found');
+
+  const fallbackPlan = explicitPlan.replace('Title: Dashboard-ready summary\n\n', '');
+  assert.equal(extractTaskTitle(fallbackPlan), body,
+    'positive control: removing Title: must expose the differing fallback title');
+});
+
+test('TASK.md title extraction strips markdown noise on fallback and explicit paths', () => {
+  assert.equal(
+    extractTaskTitle('# Task — Update `src/dashboard-view.js` title extraction\n'),
+    'Update src/dashboard-view.js title extraction',
+  );
+  assert.equal(
+    extractTaskTitle('# Task\n\nFallback text without markdown noise\n'),
+    'Fallback text without markdown noise',
+    'positive control: clean fallback text must pass through unchanged',
+  );
+  assert.equal(
+    extractTaskTitle('# Task\n\nTitle: Show `TASK.md` titles\n\nIgnored body prose\n'),
+    'Show TASK.md titles',
+    'explicit titles must use the same markdown normalization',
+  );
+});
+
+test('TASK.md title truncation prefers punctuation, then a word boundary', () => {
+  const sentenceBoundary = 'Summarize the first complete thought. Additional words keep this title well beyond the seventy character limit';
+  assert.equal(
+    extractTaskTitle(`# Task\n\n${sentenceBoundary}\n`),
+    'Summarize the first complete thought.…',
+  );
+
+  const wordBoundary = 'Build dashboard titles using the last available word boundary without splitting important terminology';
+  assert.equal(
+    extractTaskTitle(`# Task\n\n${wordBoundary}\n`),
+    'Build dashboard titles using the last available word boundary without…',
+  );
+
+  const shortTitle = 'A concise title stays exactly as written';
+  assert.equal(extractTaskTitle(`# Task\n\n${shortTitle}\n`), shortTitle);
+  assert.doesNotMatch(extractTaskTitle(`# Task\n\n${shortTitle}\n`), /…$/,
+    'titles under 70 characters must not gain an ellipsis');
 });
 
 test('run titles are read from either TASK.md layout and rendered above the short pass id', () => {

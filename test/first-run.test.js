@@ -18,6 +18,7 @@ import {
 } from '../src/doctor.js';
 import { spawnCapture } from '../src/spawn.js';
 import { CLI_COMMANDS } from '../src/cli-help.js';
+import { PLAN_TEMPLATE } from '../src/init.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 const readme = fileURLToPath(new URL('../README.md', import.meta.url));
@@ -304,6 +305,11 @@ test('doctor reports GitHub installed, authentication, and remote preconditions 
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+test('the init plan template puts its dashboard title directly below the task heading', () => {
+  assert.match(PLAN_TEMPLATE,
+    /^# Task\r?\nTitle: <one-line summary for the dashboard>\r?\n\r?\nDescribe the user-visible outcome and why it matters[.]/);
 });
 
 test('init creates detected runnable scaffolding and refuses a second overwrite', async () => {

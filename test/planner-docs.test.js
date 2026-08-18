@@ -75,6 +75,12 @@ test('SKILL.md starts its guidance with the non-waivable eight-step planner law'
   assert.match(law, /monitor continuously[\s\S]*slow is not stuck/i);
 });
 
+test('the task-writing checklist documents explicit dashboard titles and fallback', () => {
+  const checklist = markdownSection(skill, 'Writing the task');
+  assert.match(checklist,
+    /`Title: <short summary>` line directly after[\s\S]*`# Task` heading[\s\S]*dashboard displays it in place of an inferred title[\s\S]*absent[\s\S]*less reliable heuristic/i);
+});
+
 test('SKILL.md names every engine campaignShape and the derived Merge kind', () => {
   assert.ok(CAMPAIGN_SHAPES.length > 0, 'positive control: the engine must expose campaign shapes');
   for (const shape of CAMPAIGN_SHAPES) {
