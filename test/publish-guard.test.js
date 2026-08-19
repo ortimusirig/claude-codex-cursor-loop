@@ -100,6 +100,8 @@ test('a finding never echoes surrounding content', () => {
   const result = checkBlocklist({
     prose: 'secret context around Cintas here', codeText: '', blocklistPath: '/list', readFile,
   });
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0].rule, 'Cintas');
   assert.ok(!JSON.stringify(result.findings).includes('secret context'));
 });
 
@@ -112,6 +114,7 @@ test('a gitleaks finding blocks and names its surface', async () => {
   const result = await runScanners({
     codeDirectory: '/w', proseFilePath: '/tmp/p', runCommand, commandExists: present,
   });
+  assert.equal(result.findings[0]?.surface, 'code');
   assert.equal(result.ok, false);
   assert.equal(result.findings[0].check, 'gitleaks');
   assert.match(result.findings[0].rule, /aws-access-key/);
@@ -140,6 +143,10 @@ test('scanner reports never retain detected secret values', async () => {
   const result = await runScanners({
     codeDirectory: '/w', proseFilePath: '/tmp/p', runCommand, commandExists: present,
   });
+  assert.equal(result.ok, false);
+  const gitleaksFinding = result.findings.find(({ check }) => check === 'gitleaks');
+  assert.ok(gitleaksFinding);
+  assert.match(gitleaksFinding.rule, /aws-access-key/);
   assert.ok(!JSON.stringify(result).includes(credential));
 });
 

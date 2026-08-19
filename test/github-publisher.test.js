@@ -243,14 +243,20 @@ test('a guard refusal never prints a secret value', async (t) => {
       commandExists: () => true,
       guardPublish: async () => ({
         ok: false,
-        findings: [{ check: 'gitleaks', surface: 'code', rule: 'aws-access-key' }],
+        findings: [{
+          check: 'gitleaks', surface: 'code', rule: 'aws-access-key', secret: 'AKIAEXAMPLESECRET',
+        }],
         advisories: [],
         warnings: [],
       }),
       prepareAndPushBranch: async () => {},
       runCommand: async () => ({ code: 0, stdout: '{}', stderr: '' }),
     },
-  }), (error) => !/AKIA/.test(error.message));
+  }), (error) => {
+    assert.match(error.message, /aws-access-key/);
+    assert.doesNotMatch(error.message, /AKIAEXAMPLESECRET/);
+    return true;
+  });
 });
 
 test('GitHub publish preconditions have distinct actionable failures', async (t) => {
