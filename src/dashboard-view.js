@@ -641,10 +641,12 @@ function triageExplanation(checkType, kind, text) {
   throw new Error(`Unknown triage presentation: ${checkType}/${kind}/${text}`);
 }
 
-function renderTriageState(checkType, presentation) {
+function renderTriageState(checkType, presentation, runId) {
   const explanation = triageExplanation(checkType, presentation.kind, presentation.text);
-  return `<span class="result ${escapeHtml(presentation.kind)}" data-result-kind="${escapeHtml(presentation.kind)}"`
-    + ` title="${escapeHtml(explanation)}">${escapeHtml(presentation.text)}</span>`;
+  return `<button class="result ${escapeHtml(presentation.kind)}" type="button"`
+    + ` data-result-kind="${escapeHtml(presentation.kind)}" data-detail-run="${escapeHtml(runId)}"`
+    + ` data-detail-section="${escapeHtml(checkType)}" title="${escapeHtml(explanation)}">`
+    + `${escapeHtml(presentation.text)}</button>`;
 }
 
 function orderCorrectionRows(sessionRuns, allRunsById) {
@@ -729,9 +731,9 @@ function renderPassRow(run, attentionOnly, correctionDepth = 0) {
     + `<td><button class="pass-detail" type="button" data-detail-run="${escapeHtml(run.runId)}">`
     + `${escapeHtml(shortTime(run.startTs))}</button></td>`
     + `<td>${identity}</td>`
-    + `<td>${renderTriageState('gate', run.triage.gate)}</td>`
-    + `<td>${renderTriageState('correctness', run.triage.correctness)}</td>`
-    + `<td>${renderTriageState('intent', run.triage.intent)}</td>`
+    + `<td>${renderTriageState('gate', run.triage.gate, run.runId)}</td>`
+    + `<td>${renderTriageState('correctness', run.triage.correctness, run.runId)}</td>`
+    + `<td>${renderTriageState('intent', run.triage.intent, run.runId)}</td>`
     + `<td title="${escapeHtml(run.filesChanged.join(', '))}">${escapeHtml(files)}</td></tr>`;
 }
 
@@ -807,9 +809,11 @@ function renderTriage(snapshot) {
     + `<div id="sessions">${renderProjects(snapshot.runs, DEFAULT_SESSION_THRESHOLD_HOURS, true)}</div></section>`;
 }
 
-function renderVerifier(name, verifier) {
+function renderVerifier(passKey, name, verifier) {
+  const id = `detail-verifier-${passKey}`;
   if (verifier === null) {
-    return `<div class="verifier pending"><b>${escapeHtml(name)}</b><span>Pending — unknown</span></div>`;
+    return `<div id="${escapeHtml(id)}" class="verifier pending"><b>${escapeHtml(name)}</b>`
+      + '<span>Pending — unknown</span></div>';
   }
   const source = verifier.verdictSource ?? 'unknown';
   const consistency = verifier.verdictConsistency ?? 'not recorded';
@@ -825,10 +829,10 @@ function renderVerifier(name, verifier) {
     ? '<details class="verifier-process-trace"><summary>Process trace</summary>'
       + `<pre>${escapeHtml(findings)}</pre></details>`
     : '';
-  const detail = `<div class="verifier-findings"><h4>${escapeHtml(primaryHeading)}</h4>`
-    + `<pre>${escapeHtml(primary)}</pre>${processTrace}</div>`;
+  const detail = `<details class="verifier-findings"><summary>${escapeHtml(primaryHeading)}</summary>`
+    + `<pre>${escapeHtml(primary)}</pre>${processTrace}</details>`;
   if (source === 'none') {
-    return '<div class="verifier fail-safe" data-verdict-kind="fail-safe">'
+    return `<div id="${escapeHtml(id)}" class="verifier fail-safe" data-verdict-kind="fail-safe">`
       + `<b>${escapeHtml(name)}</b><strong>No verdict — unknown</strong>`
       + `<span>Recorded fail-safe value: ${escapeHtml(verifier.verdict ?? 'ISSUES')}</span>`
       + '<span>verdictSource: none</span>'
@@ -839,7 +843,7 @@ function renderVerifier(name, verifier) {
   const finding = verifier.verdict === 'ISSUES'
     ? 'Reviewer reported ISSUES — a real problem'
     : verifier.verdict === 'NO_BLOCKERS' ? 'NO_BLOCKERS — fine' : 'Reviewer verdict';
-  return '<div class="verifier reviewer" data-verdict-kind="reviewer">'
+  return `<div id="${escapeHtml(id)}" class="verifier reviewer" data-verdict-kind="reviewer">`
     + `<b>${escapeHtml(name)}</b><strong>${escapeHtml(verifier.verdict ?? 'unknown')}</strong>`
     + `<span>verdictSource: ${escapeHtml(source)}</span>`
     + `<span>Consistency: ${escapeHtml(consistency)}</span><em>${finding}</em>${detail}</div>`;
@@ -972,8 +976,8 @@ export function renderRunDetail(run) {
     + `<strong class="age" data-last-event-ts="${escapeHtml(run.lastEventTs ?? '')}">${escapeHtml(age)}</strong></div>`
     + task
     + '<section><h3>Verifier seats</h3>'
-    + renderVerifier('Correctness pass', run.verifiers.correctness)
-    + renderVerifier('Intent pass', run.verifiers.intent) + '</section>'
+    + renderVerifier('correctness', 'Correctness pass', run.verifiers.correctness)
+    + renderVerifier('intent', 'Intent pass', run.verifiers.intent) + '</section>'
     + `<section><h3>Executor rationale</h3><pre class="prose">${escapeHtml(rationale)}</pre></section>`
     + '<section><h3>Unified diff</h3>' + renderUnifiedDiff(run.diff, run.worktreeDirectory) + '</section>'
     + '<section><h3>Token usage by seat</h3><dl class="tokens">'
@@ -981,7 +985,7 @@ export function renderRunDetail(run) {
     + `<dt>Correctness</dt><dd>${escapeHtml(usageText(run.tokens.correctness))}</dd>`
     + `<dt>Intent</dt><dd>${escapeHtml(usageText(run.tokens.intent))}</dd></dl></section>`
     + `<section><h3>Files as landed</h3>${files}</section>`
-    + `<section><h3>Gate commands</h3>${gates}</section>`
+    + `<section id="detail-gate"><h3>Gate commands</h3>${gates}</section>`
     + `<section><h3>Stalls</h3>${stalls}</section>`
     + `<section><h3>Full stage timeline</h3>${renderTimeline(run.timeline)}</section></article>`;
 }
@@ -1056,16 +1060,17 @@ function sessions(runs,hours){const indexed=runs.map(function(run,index){return{
 function projectName(value){if(value===null)return'Unknown project';const parts=value.split(/[\\/]/).filter(Boolean);return parts.length?parts[parts.length-1]:value}
 function projects(runs){const byPath=new Map();runs.forEach(function(run,index){const path=typeof run.projectPath==='string'?run.projectPath:null;const group=byPath.get(path)||{projectPath:path,name:projectName(path),runs:[],latestStartMs:null,firstIndex:index,attentionCount:0};const start=timeMs(run.startTs);group.runs.push(run);if(start!==null&&(group.latestStartMs===null||start>group.latestStartMs))group.latestStartMs=start;if(run.needsAttention)group.attentionCount+=1;byPath.set(path,group)});return Array.from(byPath.values()).sort(function(a,b){if(a.latestStartMs===null&&b.latestStartMs===null)return a.firstIndex-b.firstIndex;if(a.latestStartMs===null)return 1;if(b.latestStartMs===null)return-1;return b.latestStartMs-a.latestStartMs||a.firstIndex-b.firstIndex})}
 function triageExplanation(checkType,kind,text){if(checkType==='gate'){if(kind==='clean'&&text==='Passed — fine')return'All automated checks completed successfully.';if(kind==='issues'&&text==='Failed — needs attention')return'One or more automated checks failed, so this pass needs attention.';if(kind==='pending'&&text==='Pending — not complete')return'The automated checks have not finished yet.'}if(checkType==='correctness'){if(kind==='pending'&&text==='Pending — unknown')return'The code-quality review has not run yet, so whether the code has defects is unknown.';if(kind==='unknown'&&text==='No verdict — unknown (ISSUES is a fail-safe, not a finding)')return'The code-quality review did not return a usable result; ISSUES is shown as a precaution, not because a defect was found.';if(kind==='issues'&&text==='ISSUES — reviewer found a problem')return'The code-quality review found a possible defect in the code.';if(kind==='clean'&&text==='NO_BLOCKERS — fine')return'The code-quality review did not find defects that would block this pass.';if(kind==='pending'&&text.endsWith(' — unknown'))return'The code-quality review returned "'+text+'", which the dashboard does not recognize, so whether the code has defects is unknown.'}if(checkType==='intent'){if(kind==='pending'&&text==='Pending — unknown')return'The task-intent review has not run yet, so it is unknown whether the changes meet TASK.md and whether new assertions would catch broken behavior.';if(kind==='unknown'&&text==='No verdict — unknown (ISSUES is a fail-safe, not a finding)')return'The task-intent review did not return a usable result; ISSUES is shown as a precaution, not because a mismatch with TASK.md or a weak assertion was found.';if(kind==='issues'&&text==='ISSUES — reviewer found a problem')return'The task-intent review found that the changes may not meet TASK.md or that new assertions may not catch broken behavior.';if(kind==='clean'&&text==='NO_BLOCKERS — fine')return'The task-intent review found no problem with whether the changes meet TASK.md or whether new assertions would catch broken behavior.';if(kind==='pending'&&text.endsWith(' — unknown'))return'The task-intent review returned "'+text+'", which the dashboard does not recognize, so it is unknown whether the changes meet TASK.md and whether new assertions would catch broken behavior.'}throw new Error('Unknown triage presentation: '+checkType+'/'+kind+'/'+text)}
-function resultCell(checkType,result){const explanation=triageExplanation(checkType,result.kind,result.text);return'<span class="result '+esc(result.kind)+'" data-result-kind="'+esc(result.kind)+'" title="'+esc(explanation)+'">'+esc(result.text)+'</span>'}
+function resultCell(checkType,result,runId){const explanation=triageExplanation(checkType,result.kind,result.text);return'<button class="result '+esc(result.kind)+'" type="button" data-result-kind="'+esc(result.kind)+'" data-detail-run="'+esc(runId)+'" data-detail-section="'+esc(checkType)+'" title="'+esc(explanation)+'">'+esc(result.text)+'</button>'}
 function correctionRows(sessionRuns,allRuns){const allById=new Map((allRuns||sessionRuns).map(function(run){return[run.runId,run]}));const sessionById=new Map(sessionRuns.map(function(run){return[run.runId,run]}));const parentById=new Map();sessionRuns.forEach(function(run){if(typeof run.correctsRunId==='string'&&allById.has(run.correctsRunId)&&sessionById.has(run.correctsRunId))parentById.set(run.runId,run.correctsRunId)});const cycles=new Set();sessionRuns.forEach(function(run){const path=[];const positions=new Map();let current=run.runId;for(let steps=0;steps<=sessionRuns.length&&parentById.has(current);steps++){if(positions.has(current)){path.slice(positions.get(current)).forEach(function(id){cycles.add(id)});break}positions.set(current,path.length);path.push(current);current=parentById.get(current)}});const children=new Map();const nested=new Set();sessionRuns.forEach(function(run){const parent=parentById.get(run.runId);if(parent===undefined||cycles.has(run.runId))return;const rows=children.get(parent)||[];rows.push(run);children.set(parent,rows);nested.add(run.runId)});const ordered=[];const emitted=new Set();function emit(rootRun){const stack=[{run:rootRun,depth:0}];while(stack.length){const item=stack.pop();if(emitted.has(item.run.runId))continue;emitted.add(item.run.runId);ordered.push(item);const childRows=children.get(item.run.runId)||[];for(let index=childRows.length-1;index>=0;index--)stack.push({run:childRows[index],depth:item.depth+1})}}sessionRuns.forEach(function(run){if(!nested.has(run.runId))emit(run)});sessionRuns.forEach(function(run){if(!emitted.has(run.runId))ordered.push({run:run,depth:0})});return ordered}
-function passRow(item){const run=item.run||item;const depth=item.depth||0;const hidden=state.attentionOnly&&!run.needsAttention?' hidden':'';const count=run.filesChanged.length;const files=count+' '+(count===1?'file':'files');const short='<code title="'+esc(run.runId)+'">'+esc(shortId(run.runId))+'</code>';const correction=typeof run.correctsRunId==='string'?'<small class="correction-note">corrects <code title="'+esc(run.correctsRunId)+'">'+esc(shortId(run.correctsRunId))+'</code></small>':'';const identity=run.title?'<span class="pass-identity"><b title="'+esc(run.title)+'">'+esc(run.title)+'</b><small>'+short+'</small>'+correction+'</span>':correction?'<span class="pass-identity">'+short+correction+'</span>':short;return'<tr class="pass-row '+(run.needsAttention?'attention':'clean')+'" data-client-run-id="'+esc(run.runId)+'" data-correction-depth="'+depth+'" data-needs-attention="'+run.needsAttention+'" style="--correction-depth:'+depth+'"'+hidden+'><td><button class="pass-detail" type="button" data-detail-run="'+esc(run.runId)+'">'+esc(shortTime(run.startTs))+'</button></td><td>'+identity+'</td><td>'+resultCell('gate',run.triage.gate)+'</td><td>'+resultCell('correctness',run.triage.correctness)+'</td><td>'+resultCell('intent',run.triage.intent)+'</td><td title="'+esc(run.filesChanged.join(', '))+'">'+esc(files)+'</td></tr>'}
+function passRow(item){const run=item.run||item;const depth=item.depth||0;const hidden=state.attentionOnly&&!run.needsAttention?' hidden':'';const count=run.filesChanged.length;const files=count+' '+(count===1?'file':'files');const short='<code title="'+esc(run.runId)+'">'+esc(shortId(run.runId))+'</code>';const correction=typeof run.correctsRunId==='string'?'<small class="correction-note">corrects <code title="'+esc(run.correctsRunId)+'">'+esc(shortId(run.correctsRunId))+'</code></small>':'';const identity=run.title?'<span class="pass-identity"><b title="'+esc(run.title)+'">'+esc(run.title)+'</b><small>'+short+'</small>'+correction+'</span>':correction?'<span class="pass-identity">'+short+correction+'</span>':short;return'<tr class="pass-row '+(run.needsAttention?'attention':'clean')+'" data-client-run-id="'+esc(run.runId)+'" data-correction-depth="'+depth+'" data-needs-attention="'+run.needsAttention+'" style="--correction-depth:'+depth+'"'+hidden+'><td><button class="pass-detail" type="button" data-detail-run="'+esc(run.runId)+'">'+esc(shortTime(run.startTs))+'</button></td><td>'+identity+'</td><td>'+resultCell('gate',run.triage.gate,run.runId)+'</td><td>'+resultCell('correctness',run.triage.correctness,run.runId)+'</td><td>'+resultCell('intent',run.triage.intent,run.runId)+'</td><td title="'+esc(run.filesChanged.join(', '))+'">'+esc(files)+'</td></tr>'}
 function renderSessionGroups(runs,allRuns){const groups=sessions(runs,DEFAULT_SESSION_GAP_HOURS);if(!groups.length)return'<section class="empty">No passes to group into sessions.</section>';const allFiltered=state.attentionOnly&&groups.every(function(group){return group.attentionCount===0});const message=allFiltered?'<section class="empty filter-empty">No passes need attention. Turn off the filter to see clean passes.</section>':'';return message+groups.map(function(group){const hidden=state.attentionOnly&&group.attentionCount===0?' hidden':'';const title=group.runs[0]&&group.runs[0].title||null;const different=title===null?0:group.runs.slice(1).filter(function(run){return run.title!=null&&run.title!==title}).length;const headline=title===null?fullTime(group.startTs):title+(different>0?' +'+different+' more':'');return'<details class="session" data-attention-count="'+group.attentionCount+'"'+hidden+'><summary><span><b'+(title===null?'':' title="'+esc(headline)+'"')+'>'+esc(headline)+'</b><small>'+esc(fullTime(group.startTs))+' · '+esc(duration(group.durationMs))+'</small></span><span>'+group.runs.length+' '+(group.runs.length===1?'pass':'passes')+'</span><strong>'+group.attentionCount+' need'+(group.attentionCount===1?'s':'')+' attention</strong></summary><div class="pass-table-wrap"><table class="passes"><thead><tr><th>Time</th><th>Pass</th><th>Gate</th><th>Correctness</th><th>Intent</th><th>Files changed</th></tr></thead><tbody>'+correctionRows(group.runs,allRuns||runs).map(passRow).join('')+'</tbody></table></div></details>'}).join('')}
 function renderSessions(){const target=document.getElementById('sessions');if(!target)return;const groups=projects(state.snapshot.runs);if(groups.length<=1){target.innerHTML=renderSessionGroups(state.snapshot.runs,state.snapshot.runs);return}const allFiltered=state.attentionOnly&&groups.every(function(group){return group.attentionCount===0});const message=allFiltered?'<section class="empty filter-empty">No passes need attention. Turn off the filter to see clean passes.</section>':'';target.innerHTML=message+groups.map(function(group){const hidden=state.attentionOnly&&group.attentionCount===0?' hidden':'';const subtitle=group.projectPath===null?'Unknown project':group.projectPath;return'<details class="project" data-project-path="'+esc(group.projectPath===null?'':group.projectPath)+'" data-attention-count="'+group.attentionCount+'"'+hidden+'><summary><span><b>'+esc(group.name)+'</b><small>'+esc(subtitle)+'</small></span><span>'+group.runs.length+' '+(group.runs.length===1?'pass':'passes')+'</span><strong>'+group.attentionCount+' need'+(group.attentionCount===1?'s':'')+' attention</strong></summary><div class="project-sessions">'+renderSessionGroups(group.runs,state.snapshot.runs)+'</div></details>'}).join('')}
 function refreshAges(){document.querySelectorAll('[data-last-event-ts]').forEach(function(el){const ts=Date.parse(el.dataset.lastEventTs);if(Number.isFinite(ts))el.textContent=duration(Date.now()-ts)})}
-function switchView(view){state.view=view;document.querySelectorAll('[data-view-panel]').forEach(function(panel){panel.hidden=panel.dataset.viewPanel!==view});document.querySelectorAll('[data-view]').forEach(function(button){button.setAttribute('aria-pressed',String(button.dataset.view===view))});if(view==='detail')refreshDetail()}
-async function refreshDetail(){const target=document.getElementById('detail-body');const select=document.getElementById('detail-pass');if(!target||!select||!select.value){if(target)target.innerHTML='<section class="empty">Select a pass to inspect its details.</section>';return}state.detailRunId=select.value;target.setAttribute('aria-busy','true');try{const response=await fetch('/detail?runId='+encodeURIComponent(state.detailRunId),{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That pass is no longer available.</section>'}catch(error){target.innerHTML='<section class="empty">Could not load pass detail: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy');refreshAges()}}
+function switchView(view,detailSection){state.view=view;document.querySelectorAll('[data-view-panel]').forEach(function(panel){panel.hidden=panel.dataset.viewPanel!==view});document.querySelectorAll('[data-view]').forEach(function(button){button.setAttribute('aria-pressed',String(button.dataset.view===view))});if(view==='detail')return refreshDetail(detailSection)}
+function revealDetailSection(section){if(!section)return;const anchor=document.getElementById('detail-'+section);if(!anchor)return;const report=anchor.querySelector&&anchor.querySelector('details.verifier-findings');if(report)report.open=true;anchor.scrollIntoView({behavior:'smooth',block:'start'});anchor.classList.add('detail-highlight');setTimeout(function(){anchor.classList.remove('detail-highlight')},1600)}
+async function refreshDetail(detailSection){const target=document.getElementById('detail-body');const select=document.getElementById('detail-pass');if(!target||!select||!select.value){if(target)target.innerHTML='<section class="empty">Select a pass to inspect its details.</section>';return}state.detailRunId=select.value;target.setAttribute('aria-busy','true');try{const response=await fetch('/detail?runId='+encodeURIComponent(state.detailRunId),{cache:'no-store'});target.innerHTML=response.ok?await response.text():'<section class="empty">That pass is no longer available.</section>';if(response.ok)revealDetailSection(detailSection)}catch(error){target.innerHTML='<section class="empty">Could not load pass detail: '+esc(error.message)+'</section>'}finally{target.removeAttribute('aria-busy');refreshAges()}}
 function syncDetailOptions(){const select=document.getElementById('detail-pass');if(!select)return;const wanted=state.detailRunId;select.innerHTML=state.snapshot.runs.map(function(run){return'<option value="'+esc(run.runId)+'">'+esc(run.runId)+'</option>'}).join('');if(wanted&&state.snapshot.runs.some(function(run){return run.runId===wanted}))select.value=wanted;state.detailRunId=select.value||null}
-function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail');return}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}})}
+function bind(){const attention=document.getElementById('attention-only');if(attention)attention.addEventListener('change',function(){state.attentionOnly=attention.checked;renderSessions()});root.addEventListener('click',function(event){const viewButton=event.target.closest('[data-view]');if(viewButton){switchView(viewButton.dataset.view);return}const detailButton=event.target.closest('[data-detail-run]');if(detailButton){const select=document.getElementById('detail-pass');state.detailRunId=detailButton.dataset.detailRun;if(select)select.value=state.detailRunId;switchView('detail',detailButton.dataset.detailSection);return}});root.addEventListener('change',function(event){if(event.target.id==='detail-pass'){state.detailRunId=event.target.value;refreshDetail()}})}
 bind();
 const stream=new EventSource('/events');
 stream.addEventListener('snapshot',function(event){state.snapshot=JSON.parse(event.data).snapshot;renderSessions();syncDetailOptions();if(state.view==='detail')refreshDetail();connection.textContent='Live';refreshAges()});
@@ -1111,7 +1116,8 @@ button,select,input{font:inherit}
 .passes{width:100%;border-collapse:collapse;min-width:950px}
 .passes th,.passes td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}
 .passes th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
-.pass-detail{border:0;background:transparent;color:inherit;text-decoration:underline;cursor:pointer;padding:0}
+.pass-detail,.result{border:0;background:transparent;color:inherit;cursor:pointer;padding:0;font-family:inherit}
+.pass-detail{text-decoration:underline}
 .pass-row>td:nth-child(2){padding-left:calc(.7rem + var(--correction-depth)*1.25rem)}
 .pass-identity{display:flex;flex-direction:column}
 .pass-identity small{color:var(--muted)}
@@ -1142,9 +1148,10 @@ h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 .verifier.fail-safe{border-color:var(--warn)}
 .verifier.reviewer:has(strong:first-of-type){border-color:var(--line)}
 .verifier-findings{grid-column:1/-1;margin-top:.35rem}
-.verifier-findings h4{font-size:.75rem;margin:.15rem 0}
+.verifier-findings>summary{cursor:pointer;font-size:.75rem;font-weight:650;margin:.15rem 0}
 .verifier-findings pre,.prose{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .verifier-process-trace{margin-top:.45rem;font-size:.78rem;color:var(--muted)}
+.detail-highlight{outline:2px solid var(--warn);outline-offset:4px}
 .task-plan>summary{cursor:pointer;font-weight:650}
 .tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}
 .tokens dt{font-weight:650}

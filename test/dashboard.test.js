@@ -57,6 +57,17 @@ async function page(dashboard) {
   return response.text();
 }
 
+function verifierBlock(html, passKey) {
+  const marker = `<div id="detail-verifier-${passKey}"`;
+  const start = html.indexOf(marker);
+  assert.notEqual(start, -1, `expected the ${passKey} verifier block`);
+  const nextVerifier = html.indexOf('<div id="detail-verifier-', start + marker.length);
+  const sectionEnd = html.indexOf('</section>', start);
+  const end = nextVerifier === -1 ? sectionEnd : Math.min(nextVerifier, sectionEnd);
+  assert.notEqual(end, -1, `expected the end of the ${passKey} verifier block`);
+  return html.slice(start, end);
+}
+
 async function openSse(url) {
   return new Promise((resolve, reject) => {
     const request = get(new URL('events', url), (response) => {
@@ -463,15 +474,41 @@ test('dashboard shows both labelled reviews, provenance, consistency, and ration
       'the correctness pass must be labelled and include its retained text');
     assert.match(html, /Intent pass findings[\s\S]*Intent review found the requested failure path missing/,
       'the intent pass must be labelled and include its findings');
-    assert.ok(html.includes('<div class="verifier-findings">'
-      + '<h4>Correctness pass retained output (not authoritative reviewer findings)</h4>'
-      + '<pre>Correctness output retained without a terminal marker.</pre></div>'),
-      'fail-safe fallback must keep findings as immediately visible primary content');
-    assert.ok(html.includes('<div class="verifier-findings"><h4>Intent pass findings</h4>'
-      + '<pre>Intent review found the requested failure path missing.</pre></div>'),
-      'ordinary fallback must keep findings as immediately visible primary content');
+    const correctnessBlock = verifierBlock(html, 'correctness');
+    const correctnessReportAt = correctnessBlock.indexOf('<details class="verifier-findings">');
+    assert.notEqual(correctnessReportAt, -1, 'the fail-safe report must be present and tucked');
+    const correctnessVerdictRow = correctnessBlock.slice(0, correctnessReportAt);
+    const correctnessReport = correctnessBlock.slice(correctnessReportAt);
+    assert.match(correctnessVerdictRow, /No verdict — unknown/);
+    assert.match(correctnessVerdictRow, /Recorded fail-safe value: ISSUES/);
+    assert.match(correctnessVerdictRow, /verdictSource: none/);
+    assert.match(correctnessVerdictRow, /Consistency: consistent/);
+    assert.match(correctnessVerdictRow, /ISSUES is a fail-safe, not a reviewer finding/);
+    assert.match(correctnessReport,
+      /^<details class="verifier-findings"><summary>Correctness pass retained output \(not authoritative reviewer findings\)<\/summary>/);
+    assert.match(correctnessReport,
+      /<pre>Correctness output retained without a terminal marker[.]<\/pre>/,
+      'positive control: the collapsed fail-safe report must retain its body');
+
+    const intentBlock = verifierBlock(html, 'intent');
+    const intentReportAt = intentBlock.indexOf('<details class="verifier-findings">');
+    assert.notEqual(intentReportAt, -1, 'the ordinary report must be present and tucked');
+    const intentVerdictRow = intentBlock.slice(0, intentReportAt);
+    const intentReport = intentBlock.slice(intentReportAt);
+    assert.match(intentVerdictRow, /<strong>ISSUES<\/strong>/);
+    assert.match(intentVerdictRow, /verdictSource: assistant/);
+    assert.match(intentVerdictRow, /Consistency: disagreement/);
+    assert.match(intentVerdictRow, /Reviewer reported ISSUES — a real problem/);
+    assert.match(intentReport,
+      /^<details class="verifier-findings"><summary>Intent pass findings<\/summary>/);
+    assert.match(intentReport, /<pre>Intent review found the requested failure path missing[.]<\/pre>/,
+      'positive control: the collapsed ordinary report must retain its body');
+    for (const report of [correctnessReport, intentReport]) {
+      assert.doesNotMatch(report, /^<details class="verifier-findings"[^>]*\sopen(?:\s|>)/,
+        'verifier reports must be collapsed by default');
+    }
     assert.doesNotMatch(html, /<details class="verifier-process-trace">/,
-      'findings-only fallbacks must remain primary instead of being collapsed');
+      'findings-only reports have no distinct process trace to add');
     assert.match(html, /Correctness pass[\s\S]*Consistency: consistent/);
     assert.match(html, /Intent pass[\s\S]*Consistency: disagreement/);
     assert.match(html, /Executor rationale[\s\S]*Kept the local diff intact/);
@@ -488,7 +525,7 @@ test('dashboard shows both labelled reviews, provenance, consistency, and ration
   }
 });
 
-test('verifier reports are primary and distinct findings remain collapsed process traces', () => {
+test('verifier reports are collapsed and retain distinct nested process traces', () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-verifier-plans-'));
   const runId = 'run-verifier-plans';
   const run = makeRun(root, runId, [
@@ -520,20 +557,31 @@ test('verifier reports are primary and distinct findings remain collapsed proces
     assert.equal(digested.verifiers.correctness.plan, correctnessPlan);
     assert.equal(digested.verifiers.intent.plan, intentPlan);
     const html = renderRunDetail(digested);
-    const correctnessBlock = '<div class="verifier-findings"><h4>Correctness pass report</h4>'
+    assert.match(html, /<section id="detail-gate"><h3>Gate commands<\/h3>/);
+    const verifierOpenings = [...html.matchAll(
+      /<div id="(detail-verifier-(?:correctness|intent))" class="verifier/g,
+    )].map((match) => match[1]);
+    assert.deepEqual(verifierOpenings, [
+      'detail-verifier-correctness',
+      'detail-verifier-intent',
+    ], 'the stable verifier anchors must belong to two distinct verifier elements');
+    const correctnessBlock = '<details class="verifier-findings"><summary>Correctness pass report</summary>'
       + '<pre>## Correctness\nSpecific &lt;check&gt; passed &amp; stayed covered.\n\n## Verdict\nNO_BLOCKERS</pre>'
       + '<details class="verifier-process-trace"><summary>Process trace</summary>'
-      + `<pre>${correctnessFindings}</pre></details></div>`;
+      + `<pre>${correctnessFindings}</pre></details></details>`;
     assert.ok(html.includes(correctnessBlock),
-      'ordinary rendering must show the report before its distinguishable process trace');
+      'ordinary rendering must tuck the report around its distinguishable process trace');
 
-    const intentBlock = '<div class="verifier-findings">'
-      + '<h4>Intent pass retained report (not authoritative reviewer findings)</h4>'
+    const intentBlock = '<details class="verifier-findings">'
+      + '<summary>Intent pass retained report (not authoritative reviewer findings)</summary>'
       + `<pre>${intentPlan}</pre>`
       + '<details class="verifier-process-trace"><summary>Process trace</summary>'
-      + `<pre>${intentFindings}</pre></details></div>`;
+      + `<pre>${intentFindings}</pre></details></details>`;
     assert.ok(html.includes(intentBlock),
-      'fail-safe rendering must show the report before its distinguishable process trace');
+      'fail-safe rendering must tuck the report around its distinguishable process trace');
+    assert.equal((html.match(/<details class="verifier-findings">/g) ?? []).length, 2);
+    assert.doesNotMatch(html, /<details class="verifier-findings"[^>]*\sopen(?:\s|>)/,
+      'both verifier reports must be collapsed by default');
     assert.equal((html.match(/<details class="verifier-process-trace">/g) ?? []).length, 2);
     assert.doesNotMatch(html, /<details class="verifier-process-trace"[^>]*\sopen(?:\s|>)/,
       'both process traces must be collapsed by default');
@@ -760,8 +808,15 @@ function passRowHtml(html, runId) {
 
 function triageBadges(rowHtml) {
   return [...rowHtml.matchAll(
-    /<span class="result ([^"]+)" data-result-kind="([^"]+)" title="([^"]+)">([^<]+)<\/span>/g,
-  )].map((match) => ({ classKind: match[1], dataKind: match[2], title: match[3], text: match[4] }));
+    /<button class="result ([^"]+)" type="button" data-result-kind="([^"]+)" data-detail-run="([^"]+)" data-detail-section="([^"]+)" title="([^"]+)">([^<]+)<\/button>/g,
+  )].map((match) => ({
+    classKind: match[1],
+    dataKind: match[2],
+    runId: match[3],
+    section: match[4],
+    title: match[5],
+    text: match[6],
+  }));
 }
 
 test('session inference groups the just-under gap and splits the just-over gap', () => {
@@ -826,6 +881,168 @@ test('full pass titles and computed session headlines are available on hover in 
       .includes(`<b title="${longTitle}">${longTitle}</b>`),
     `${name}: the pass tooltip must contain the full exact stored title`);
   }
+});
+
+test('triage result buttons identify their run and distinct Detail landing sections', () => {
+  const runId = 'wired-result-run';
+  const runs = [displayTriageRun(runId, '2026-08-15T01:00:00.000Z')];
+  const renderings = [
+    ['server', renderSessionList(runs, 2, false)],
+    ['client', renderClientProjectList(runs, false).sessionHtml],
+  ];
+
+  for (const [name, html] of renderings) {
+    const row = passRowHtml(html, runId);
+    const badges = triageBadges(row);
+    assert.equal(badges.length, 3, `${name}: all result cells must be buttons`);
+    assert.deepEqual(badges.map((badge) => badge.runId), [runId, runId, runId],
+      `${name}: every result button must target its own run`);
+    assert.deepEqual(badges.map((badge) => badge.section), ['gate', 'correctness', 'intent'],
+      `${name}: each result button must name its distinct Detail anchor`);
+
+    const timeButton = row.match(/<button class="pass-detail"[^>]*>/)?.[0];
+    assert.ok(timeButton, `${name}: the existing time-cell Detail button must remain`);
+    assert.match(timeButton, new RegExp(`data-detail-run="${runId}"`));
+    assert.doesNotMatch(timeButton, /data-detail-section=/,
+      `${name}: the time button must not request a section reveal`);
+  }
+});
+
+test('client reveals a requested Detail section only after its asynchronous fetch', async () => {
+  const runId = 'async-detail-run';
+  const shell = renderDashboardPage({
+    sourcePath: 'portable-fixture', message: null, runs: [],
+    mode: 'scratch', observedAt: '2026-08-15T00:00:00.000Z',
+  });
+  const script = shell.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script, 'the dashboard page must include its executable inline client script');
+
+  const listeners = {};
+  const root = {
+    addEventListener(type, listener) { listeners[type] = listener; },
+  };
+  const detailSelect = { value: 'initial-run' };
+  let detailLoaded = false;
+  let resolveInstalled;
+  const detailBody = {
+    value: '',
+    set innerHTML(value) {
+      this.value = value;
+      detailLoaded = true;
+      resolveInstalled?.();
+    },
+    get innerHTML() { return this.value; },
+    setAttribute() {},
+    removeAttribute() {},
+  };
+  const reports = {
+    correctness: { open: false },
+    intent: { open: false },
+  };
+  const scrolls = [];
+  const highlightClasses = new Map();
+  const anchors = Object.fromEntries(['gate', 'correctness', 'intent'].map((section) => {
+    const classes = new Set();
+    highlightClasses.set(section, classes);
+    return [section, {
+      querySelector(selector) {
+        assert.equal(selector, 'details.verifier-findings');
+        return reports[section] ?? null;
+      },
+      scrollIntoView(options) { scrolls.push({ section, options }); },
+      classList: {
+        add(value) { classes.add(value); },
+        remove(value) { classes.delete(value); },
+      },
+    }];
+  }));
+  const elements = {
+    connection: { textContent: '' },
+    runs: root,
+    'attention-only': { checked: true, addEventListener() {} },
+    'detail-pass': detailSelect,
+    'detail-body': detailBody,
+    'initial-dashboard-data': { textContent: JSON.stringify({ runs: [] }) },
+  };
+  const fetchCalls = [];
+  let resolveFetch;
+  const timers = [];
+  class FakeEventSource {
+    addEventListener() {}
+  }
+  const context = createContext({
+    document: {
+      getElementById(id) {
+        if (elements[id]) return elements[id];
+        if (!detailLoaded) return null;
+        const section = id.replace(/^detail-(?:verifier-)?/, '');
+        return anchors[section] ?? null;
+      },
+      querySelectorAll() { return []; },
+    },
+    EventSource: FakeEventSource,
+    fetch(url, options) {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => { resolveFetch = resolve; });
+    },
+    setInterval() {},
+    setTimeout(callback, delay) {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+  });
+  runInContext(script, context);
+
+  const click = (section) => {
+    detailLoaded = false;
+    Object.values(reports).forEach((report) => { report.open = false; });
+    const dataset = { detailRun: runId };
+    if (section !== undefined) dataset.detailSection = section;
+    const button = {
+      dataset,
+      closest(selector) {
+        if (selector === '[data-detail-run]') return this;
+        return null;
+      },
+    };
+    listeners.click({ target: button });
+  };
+  const finishFetch = async () => {
+    const installed = new Promise((resolve) => { resolveInstalled = resolve; });
+    resolveFetch({ ok: true, async text() { return '<article>fresh detail</article>'; } });
+    await installed;
+    resolveInstalled = undefined;
+  };
+
+  for (const section of ['gate', 'correctness', 'intent']) {
+    const scrollCount = scrolls.length;
+    click(section);
+    assert.equal(detailSelect.value, runId, `${section}: the selected run must switch immediately`);
+    assert.equal(scrolls.length, scrollCount,
+      `${section}: no stale pre-fetch anchor may be scrolled`);
+    await finishFetch();
+    const lastScroll = scrolls.at(-1);
+    assert.equal(lastScroll.section, section,
+      `${section}: the fresh anchor must be scrolled after the response is installed`);
+    assert.equal(lastScroll.options.behavior, 'smooth');
+    assert.equal(lastScroll.options.block, 'start');
+    assert.equal(reports[section]?.open ?? false, section !== 'gate',
+      `${section}: verifier reports open while Gate remains an ordinary section`);
+    assert.ok(highlightClasses.get(section).has('detail-highlight'),
+      `${section}: the destination must be highlighted`);
+    assert.equal(timers.at(-1).delay, 1600);
+    timers.at(-1).callback();
+    assert.equal(highlightClasses.get(section).has('detail-highlight'), false,
+      `${section}: the highlight must be temporary`);
+  }
+
+  const scrollCount = scrolls.length;
+  click(undefined);
+  await finishFetch();
+  assert.equal(scrolls.length, scrollCount,
+    'the existing time-cell path must load Detail without revealing a section');
+  assert.equal(fetchCalls.length, 4);
+  assert.ok(fetchCalls.every((call) => call.url === `/detail?runId=${runId}`));
 });
 
 test('every triage state has a type-specific plain-language hover explanation in both renderers', () => {
