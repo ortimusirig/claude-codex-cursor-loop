@@ -15,7 +15,7 @@ import {
 import { get } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
 import { startDashboard } from '../src/dashboard.js';
 import {
@@ -31,6 +31,7 @@ import {
   renderSessionList,
   runNeedsAttention,
   snapshotForClient,
+  vscodeFileHref,
 } from '../src/dashboard-view.js';
 import { spawnCapture } from '../src/spawn.js';
 
@@ -379,7 +380,7 @@ test('scratch-root lists the newest run first', async () => {
   }
 });
 
-test('dashboard shows both labelled reviews, provenance, consistency, rationale, and one VS Code link', async () => {
+test('dashboard shows both labelled reviews, provenance, consistency, and rationale without an obsolete VS Code link', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-verdict-'));
   const runId = 'run-verdict-source';
   const run = makeRun(root, runId, [
@@ -428,12 +429,9 @@ test('dashboard shows both labelled reviews, provenance, consistency, rationale,
     assert.match(html, /Executor rationale[\s\S]*Kept the local diff intact/);
     assert.doesNotMatch(html, /data-copy-command|Copy command|class="copy-row"/,
       'Detail must omit the retired copy-command box');
-    assert.equal((html.match(/>Open in VS Code<\/a>/g) ?? []).length, 1,
-      'Detail must render exactly one Open in VS Code link');
-    const fallbackHref = `vscode://file/${encodeURIComponent(run.work)}`;
-    assert.ok(html.includes(`href="${fallbackHref}">Open in VS Code</a>`),
-      'a run without CHANGES.diff must link to its worktree directory');
-    assert.doesNotMatch(html, new RegExp(encodeURIComponent(join(run.work, 'CHANGES.diff'))));
+    assert.equal((html.match(/>Open in VS Code<\/a>/g) ?? []).length, 0,
+      'a run without a diff must keep the plain message and build no per-file links');
+    assert.doesNotMatch(html, /Open the worktree in VS Code/);
     assert.match(html, /Correctness[\s\S]*in 11/);
     assert.match(html, /Intent[\s\S]*out 7/);
   } finally {
@@ -1081,28 +1079,74 @@ test('triage keeps fixed session grouping without the editable heuristic control
     'sessions must be collapsed by default');
 });
 
-test('unified diff renders additions and removals with distinct line meanings', () => {
+test('VS Code file URIs preserve Windows path syntax while encoding real special characters', () => {
+  const windowsPath = String.raw`C:\ccc\w\Demo Run\w\src\value.js`;
+  const expected = `vscode://file${pathToFileURL(windowsPath).pathname}`;
+  const actual = vscodeFileHref(windowsPath);
+  const previousBrokenHref = `vscode://file/${encodeURIComponent(windowsPath)}`;
+
+  assert.equal(actual, expected,
+    'the link helper must use the platform conversion supplied by pathToFileURL');
+  assert.match(actual, /^vscode:\/\/file\/C:\/ccc\/w\/Demo%20Run\/w\/src\/value[.]js$/);
+  assert.doesNotMatch(actual, /%3A|%5C/i,
+    'the drive-letter colon and Windows separators must not be percent-encoded');
+  assert.notEqual(actual, previousBrokenHref,
+    'the regression control must prove raw-path encodeURIComponent is observably different');
+});
+
+test('unified diff renders one collapsed, linked section per modified, new, and deleted file', () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc dashboard diff #-'));
   const runId = 'run-real-diff';
   const run = makeRun(root, runId, [
     event(runId, 'report', 'finish', { ts: '2026-08-15T00:00:00.000Z' }),
   ]);
   writeFileSync(join(run.work, 'CHANGES.diff'), [
+    'diff --git a/src/value.js b/src/value.js',
+    'index 1111111..2222222 100644',
     '--- a/src/value.js',
     '+++ b/src/value.js',
     '@@ -1 +1 @@',
     '-const value = "before";',
     '+const value = "after";',
+    'diff --git a/src/new file.js b/src/new file.js',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/src/new file.js',
+    '@@ -0,0 +1 @@',
+    '+export const created = true;',
+    'diff --git a/src/removed.js b/src/removed.js',
+    'deleted file mode 100644',
+    '--- a/src/removed.js',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-export const removed = true;',
     '',
   ].join('\n'));
   try {
     const snapshot = buildDashboardSnapshot({ runDirectory: run.directory });
     const html = renderRunDetail(snapshot.runs[0]);
-    const diffHref = `vscode://file/${encodeURIComponent(join(run.work, 'CHANGES.diff'))}`;
-    assert.ok(html.includes(`href="${diffHref}">Open in VS Code</a>`),
-      'the clickable link must open the existing full CHANGES.diff path');
-    assert.ok(!html.includes(`href="vscode://file/${encodeURIComponent(run.work)}">Open in VS Code</a>`),
-      'the existing-diff case must not link only to the worktree');
+    const sections = html.match(/<details class="diff-file">[\s\S]*?<\/details>/g) ?? [];
+    assert.equal(sections.length, 3);
+    assert.ok(sections.every((section) => !/<details[^>]*\sopen(?:\s|>)/.test(section)),
+      'every file section must be collapsed by default');
+
+    const expectedFiles = [
+      ['b/src/value.js', 'src/value.js'],
+      ['b/src/new file.js', 'src/new file.js'],
+      ['a/src/removed.js', 'src/removed.js'],
+    ];
+    expectedFiles.forEach(([displayPath, relativePath], index) => {
+      const expectedHref = `vscode://file${pathToFileURL(join(run.work, relativePath)).pathname}`;
+      assert.ok(sections[index].includes(`<summary><code>${displayPath}</code></summary>`));
+      assert.ok(sections[index].includes(`href="${expectedHref}">Open in VS Code</a>`),
+        `${displayPath} must link to its actual worktree file`);
+      assert.equal((sections[index].match(/>Open in VS Code<\/a>/g) ?? []).length, 1);
+    });
+
+    const wholeDiffHref = `vscode://file${pathToFileURL(join(run.work, 'CHANGES.diff')).pathname}`;
+    assert.ok(!html.includes(`href="${wholeDiffHref}"`),
+      'the whole CHANGES.diff link must be removed');
+    assert.doesNotMatch(html, /Open the worktree in VS Code/);
     assert.match(html, /data-diff-line="removed">-const value = &quot;before&quot;;/);
     assert.match(html, /data-diff-line="added">\+const value = &quot;after&quot;;/);
     assert.match(html, /\.diff-add\{background:var\(--add\);color:var\(--ok\)\}|class="diff-line diff-add"/);
@@ -1112,11 +1156,26 @@ test('unified diff renders additions and removals with distinct line meanings', 
   }
 });
 
-test('oversized unified diff is byte-capped and says so plainly', () => {
+test('a diff capped mid-hunk keeps earlier file sections and shows one link-free notice', () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-diff-cap-'));
   const runId = 'run-large-diff';
   const run = makeRun(root, runId, [event(runId, 'report', 'finish')]);
-  const diff = '-removed line\n+added line\n'.repeat(Math.ceil(MAX_RENDERED_DIFF_BYTES / 8));
+  const completeFile = [
+    'diff --git a/src/complete.js b/src/complete.js',
+    '--- a/src/complete.js',
+    '+++ b/src/complete.js',
+    '@@ -1 +1 @@',
+    '-export const state = "before";',
+    '+export const state = "after";',
+    '',
+  ].join('\n');
+  const finalFileStart = [
+    'diff --git a/src/truncated.js b/src/truncated.js',
+    '--- a/src/truncated.js',
+    '+++ b/src/truncated.js',
+    '@@ -0,0 +1 @@',
+  ].join('\n') + '\n';
+  const diff = completeFile + finalFileStart + `+${'x'.repeat(MAX_RENDERED_DIFF_BYTES)}`;
   writeFileSync(join(run.work, 'CHANGES.diff'), diff);
   try {
     const snapshot = buildDashboardSnapshot({ runDirectory: run.directory });
@@ -1124,12 +1183,22 @@ test('oversized unified diff is byte-capped and says so plainly', () => {
     assert.equal(rendered.capped, true);
     assert.equal(rendered.renderedByteCount, MAX_RENDERED_DIFF_BYTES);
     assert.equal(rendered.byteCount, Buffer.byteLength(diff));
+    assert.equal(rendered.text.endsWith('\n'), false,
+      'the fixture must exercise a raw byte cut in the final file hunk');
     const html = renderRunDetail(snapshot.runs[0]);
     assert.match(html, /Diff rendering capped[\s\S]*Showing 131,072 of [\d,]+ bytes/);
-    const diffHref = `vscode://file/${encodeURIComponent(join(run.work, 'CHANGES.diff'))}`;
-    const cappedNotice = html.match(/<p class="diff-capped">([\s\S]*?)<\/p>/)?.[1];
-    assert.ok(cappedNotice?.includes(`href="${diffHref}">Open in VS Code</a>`),
-      'the capped notice must link to the complete CHANGES.diff file');
+    assert.equal((html.match(/<p class="diff-capped">/g) ?? []).length, 1);
+    const cappedNotice = html.match(/<p class="diff-capped">([\s\S]*?)<\/p>/)?.[1] ?? '';
+    assert.doesNotMatch(cappedNotice, /href=|Open in VS Code/,
+      'the one overall cap notice must not contain its own VS Code affordance');
+    const sections = html.match(/<details class="diff-file">[\s\S]*?<\/details>/g) ?? [];
+    assert.equal(sections.length, 2);
+    assert.match(sections[0], /<summary><code>b\/src\/complete[.]js<\/code><\/summary>/);
+    assert.match(sections[0], /data-diff-line="added">\+export const state = &quot;after&quot;;/);
+    assert.match(sections[1], /<summary><code>b\/src\/truncated[.]js<\/code><\/summary>/);
+    assert.equal((html.match(/>Open in VS Code<\/a>/g) ?? []).length, 2);
+    const wholeDiffHref = `vscode://file${pathToFileURL(join(run.work, 'CHANGES.diff')).pathname}`;
+    assert.ok(!html.includes(`href="${wholeDiffHref}"`));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -8,6 +8,7 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CCC_DASHBOARD_MARKER } from './dashboard-config.js';
 import { CAMPAIGN_EVENTS_FILENAME, readEventStream } from './event-stream.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
@@ -830,22 +831,49 @@ function renderTimeline(timeline) {
   }).join('')}</ol>`;
 }
 
-function vscodeFileHref(path) {
-  return `vscode://file/${encodeURIComponent(path)}`;
+export function vscodeFileHref(path) {
+  return `vscode://file${pathToFileURL(path).pathname}`;
 }
 
 function renderVsCodeLink(href) {
   return `<a href="${escapeHtml(href)}">Open in VS Code</a>`;
 }
 
-export function renderUnifiedDiff(diff, openInVsCodeHref = null) {
-  if (diff.message !== null) return `<p class="notice">${escapeHtml(diff.message)}</p>`;
-  const completeDiffHref = openInVsCodeHref
-    ?? (typeof diff.path === 'string' ? vscodeFileHref(diff.path) : null);
-  const capNotice = diff.capped
-    ? `<p class="diff-capped"><strong>Diff rendering capped.</strong> Showing ${diff.renderedByteCount.toLocaleString('en-US')} of ${diff.byteCount.toLocaleString('en-US')} bytes. ${completeDiffHref === null ? 'Open CHANGES.diff in VS Code' : renderVsCodeLink(completeDiffHref)} for the complete diff.</p>`
-    : `<p class="muted">${diff.byteCount.toLocaleString('en-US')} bytes.</p>`;
-  const lines = diff.text.split(/(?<=\n)/).map((line) => {
+function diffPathFromMarkers(segment, fallbackPrevious = null, fallbackCurrent = null) {
+  const previous = segment.match(/^--- (a\/[^\r\n]+|\/dev\/null)\r?$/m)?.[1] ?? null;
+  const current = segment.match(/^\+\+\+ (b\/[^\r\n]+|\/dev\/null)\r?$/m)?.[1] ?? null;
+  if (current?.startsWith('b/')) return current;
+  if (current === '/dev/null' && previous?.startsWith('a/')) return previous;
+  if (fallbackCurrent?.startsWith('b/')) return fallbackCurrent;
+  return fallbackPrevious?.startsWith('a/') ? fallbackPrevious : null;
+}
+
+export function parseUnifiedDiff(text) {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const boundaries = [...text.matchAll(/^diff --git a\/([^\r\n]+) b\/([^\r\n]+)\r?$/gm)];
+  if (boundaries.length === 0) {
+    return [{
+      displayPath: diffPathFromMarkers(text),
+      text,
+    }];
+  }
+  return boundaries.map((boundary, index) => {
+    const start = index === 0 ? 0 : boundary.index;
+    const end = boundaries[index + 1]?.index ?? text.length;
+    const segment = text.slice(start, end);
+    return {
+      displayPath: diffPathFromMarkers(
+        segment,
+        `a/${boundary[1]}`,
+        `b/${boundary[2]}`,
+      ),
+      text: segment,
+    };
+  });
+}
+
+function renderDiffLines(text) {
+  return text.split(/(?<=\n)/).map((line) => {
     const bare = line.endsWith('\n') ? line.slice(0, -1) : line;
     const kind = bare.startsWith('+') && !bare.startsWith('+++') ? 'diff-add'
       : bare.startsWith('-') && !bare.startsWith('---') ? 'diff-remove'
@@ -853,7 +881,27 @@ export function renderUnifiedDiff(diff, openInVsCodeHref = null) {
     const label = kind === 'diff-add' ? 'added' : kind === 'diff-remove' ? 'removed' : 'context';
     return `<span class="diff-line ${kind}" data-diff-line="${label}">${escapeHtml(bare || ' ')}</span>`;
   }).join('');
-  return `${capNotice}<pre class="diff" aria-label="Unified diff">${lines}</pre>`;
+}
+
+export function renderUnifiedDiff(diff, worktreeDirectory = null) {
+  if (diff.message !== null) return `<p class="notice">${escapeHtml(diff.message)}</p>`;
+  const capNotice = diff.capped
+    ? `<p class="diff-capped"><strong>Diff rendering capped.</strong> Showing ${diff.renderedByteCount.toLocaleString('en-US')} of ${diff.byteCount.toLocaleString('en-US')} bytes. The overall diff content was truncated.</p>`
+    : `<p class="muted">${diff.byteCount.toLocaleString('en-US')} bytes.</p>`;
+  const files = parseUnifiedDiff(diff.text).map((file) => {
+    const label = file.displayPath ?? 'Unknown file';
+    const relativePath = file.displayPath?.replace(/^[ab]\//, '') ?? null;
+    const href = typeof worktreeDirectory === 'string' && relativePath !== null
+      ? vscodeFileHref(join(worktreeDirectory, relativePath))
+      : null;
+    const link = href === null ? '' : `<p class="diff-file-link">${renderVsCodeLink(href)}</p>`;
+    return '<details class="diff-file">'
+      + `<summary><code>${escapeHtml(label)}</code></summary>`
+      + `<div class="diff-file-content">${link}`
+      + `<pre class="diff" aria-label="Unified diff for ${escapeHtml(label)}">`
+      + `${renderDiffLines(file.text)}</pre></div></details>`;
+  }).join('');
+  return `${capNotice}<div class="diff-files">${files}</div>`;
 }
 
 export function renderRunDetail(run) {
@@ -881,14 +929,6 @@ export function renderRunDetail(run) {
     }).join('')}</ul>`;
   const rationale = run.executorRationale
     ?? '(executor rationale is recorded when the run report completes)';
-  const diffPath = join(run.worktreeDirectory, 'CHANGES.diff');
-  let vscodeTarget = run.worktreeDirectory;
-  try {
-    if (statSync(diffPath).isFile()) vscodeTarget = diffPath;
-  } catch {
-    // No diff is expected for no-op and error runs; open the worktree instead.
-  }
-  const openInVsCodeHref = vscodeFileHref(vscodeTarget);
 
   return `<article class="run-card ${escapeHtml(run.state)}">`
     + `<header><div><h2>${escapeHtml(run.runId)}</h2><p title="${escapeHtml(run.directory)}">`
@@ -901,9 +941,7 @@ export function renderRunDetail(run) {
     + renderVerifier('Correctness pass', run.verifiers.correctness)
     + renderVerifier('Intent pass', run.verifiers.intent) + '</section>'
     + `<section><h3>Executor rationale</h3><pre class="prose">${escapeHtml(rationale)}</pre></section>`
-    + '<section><h3>Open the worktree in VS Code</h3>'
-    + `<p>${renderVsCodeLink(openInVsCodeHref)}</p></section>`
-    + '<section><h3>Unified diff</h3>' + renderUnifiedDiff(run.diff, openInVsCodeHref) + '</section>'
+    + '<section><h3>Unified diff</h3>' + renderUnifiedDiff(run.diff, run.worktreeDirectory) + '</section>'
     + '<section><h3>Token usage by seat</h3><dl class="tokens">'
     + `<dt>Executor</dt><dd>${escapeHtml(usageText(run.tokens.executor))}</dd>`
     + `<dt>Correctness</dt><dd>${escapeHtml(usageText(run.tokens.correctness))}</dd>`
@@ -1087,6 +1125,10 @@ h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 .timeline time,.timeline span,.timeline small{color:var(--muted)}
 .timeline small{grid-column:2/-1}
 .diff-capped{padding:.6rem;background:var(--soft);border-left:3px solid var(--warn)}
+.diff-file{background:var(--card);border:1px solid var(--line);border-radius:7px;margin:.7rem 0;overflow:hidden}
+.diff-file>summary{cursor:pointer;padding:.7rem .85rem}
+.diff-file-content{border-top:1px solid var(--line);padding:.7rem}
+.diff-file-link{margin:0 0 .7rem}
 .diff{margin:.35rem 0;max-height:65vh;overflow:auto;border:1px solid var(--line);background:var(--card);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
 .diff-line{display:block;min-height:1.5em;padding:0 .5rem;white-space:pre}
 .diff-add{background:var(--add);color:var(--ok)}
