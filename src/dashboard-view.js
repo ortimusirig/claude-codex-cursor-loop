@@ -43,6 +43,7 @@ function emptyRun(directory, overrides = {}) {
     eventsPath: null,
     runId: basename(directory),
     title: null,
+    taskBody: null,
     projectPath: null,
     correctsRunId: null,
     state: 'waiting',
@@ -99,6 +100,7 @@ function enrichFromFacts(verifiers, facts) {
       verdictSource: iteration?.verifier?.verdictSource ?? facts.verdictSource ?? null,
       verdictConsistency: consistencyStatus(iteration?.verifier?.verdictConsistency)
         ?? consistencyStatus(facts.verifierConsistency),
+      plan: facts.verifierPlan ?? iteration?.verifier?.plan ?? null,
       findings: facts.verifierFindings ?? iteration?.verifier?.findings ?? null,
     },
     intent: {
@@ -108,12 +110,13 @@ function enrichFromFacts(verifiers, facts) {
         ?? null,
       verdictConsistency: consistencyStatus(iteration?.intentVerifier?.verdictConsistency)
         ?? consistencyStatus(facts.intentVerifierConsistency),
+      plan: facts.intentVerifierPlan ?? iteration?.intentVerifier?.plan ?? null,
       findings: facts.intentVerifierFindings ?? iteration?.intentVerifier?.findings ?? null,
     },
   };
   for (const pass of ['correctness', 'intent']) {
     if (verifiers[pass] !== null || completed[pass].verdict !== null
-      || completed[pass].findings !== null) {
+      || completed[pass].plan !== null || completed[pass].findings !== null) {
       completed[pass] = { ...(verifiers[pass] ?? {}), ...completed[pass] };
     } else {
       completed[pass] = null;
@@ -264,15 +267,28 @@ function readTaskTitle(directory) {
   }
 }
 
+function readTaskBody(directory) {
+  const taskPath = existsSync(join(directory, 'TASK.md'))
+    ? join(directory, 'TASK.md')
+    : join(directory, 'w', 'TASK.md');
+  try {
+    return readFileSync(taskPath, { encoding: 'utf8', flag: 'r' });
+  } catch {
+    return null;
+  }
+}
+
 function digestRunDirectory(runDirectory) {
   const directory = resolve(runDirectory);
   const title = readTaskTitle(directory);
+  const taskBody = readTaskBody(directory);
   let stream;
   try {
     stream = readEventStream(directory, { allowMissing: true });
   } catch (error) {
     return emptyRun(directory, {
       title,
+      taskBody,
       state: 'error',
       message: `Cannot read event stream: ${error.message}`,
     });
@@ -282,6 +298,7 @@ function digestRunDirectory(runDirectory) {
     return emptyRun(directory, {
       runId: stream.runId,
       title,
+      taskBody,
       message: `Run directory does not exist yet: ${directory}`,
     });
   }
@@ -289,6 +306,7 @@ function digestRunDirectory(runDirectory) {
     return emptyRun(directory, {
       runId: stream.runId,
       title,
+      taskBody,
       message: `Run directory exists; waiting for events.jsonl: ${directory}`,
     });
   }
@@ -316,6 +334,7 @@ function digestRunDirectory(runDirectory) {
         verdict: event.verdict ?? null,
         verdictSource: event.source ?? event.verdictSource ?? null,
         verdictConsistency: consistencyStatus(event.verdictConsistency),
+        plan: null,
         findings: null,
         code: event.code ?? null,
         timedOut: event.timedOut === true,
@@ -362,6 +381,7 @@ function digestRunDirectory(runDirectory) {
     eventsPath: stream.eventsPath,
     runId: stream.runId,
     title,
+    taskBody,
     projectPath: events.find((event) => event.stage === 'isolate' && event.type === 'start'
       && typeof event.source === 'string')?.source ?? null,
     correctsRunId: events.find((event) => event.stage === 'isolate' && event.type === 'start'
@@ -794,11 +814,19 @@ function renderVerifier(name, verifier) {
   const source = verifier.verdictSource ?? 'unknown';
   const consistency = verifier.verdictConsistency ?? 'not recorded';
   const findings = verifier.findings ?? '(findings are recorded when the run report completes)';
-  const findingsHeading = source === 'none'
-    ? `${name} retained output (not authoritative reviewer findings)`
-    : `${name} findings`;
-  const detail = `<div class="verifier-findings"><h4>${escapeHtml(findingsHeading)}</h4>`
-    + `<pre>${escapeHtml(findings)}</pre></div>`;
+  const hasPlan = verifier.plan !== null && verifier.plan !== undefined;
+  const primary = hasPlan ? verifier.plan : findings;
+  const primaryHeading = source === 'none'
+    ? hasPlan
+      ? `${name} retained report (not authoritative reviewer findings)`
+      : `${name} retained output (not authoritative reviewer findings)`
+    : hasPlan ? `${name} report` : `${name} findings`;
+  const processTrace = hasPlan
+    ? '<details class="verifier-process-trace"><summary>Process trace</summary>'
+      + `<pre>${escapeHtml(findings)}</pre></details>`
+    : '';
+  const detail = `<div class="verifier-findings"><h4>${escapeHtml(primaryHeading)}</h4>`
+    + `<pre>${escapeHtml(primary)}</pre>${processTrace}</div>`;
   if (source === 'none') {
     return '<div class="verifier fail-safe" data-verdict-kind="fail-safe">'
       + `<b>${escapeHtml(name)}</b><strong>No verdict — unknown</strong>`
@@ -929,6 +957,11 @@ export function renderRunDetail(run) {
     }).join('')}</ul>`;
   const rationale = run.executorRationale
     ?? '(executor rationale is recorded when the run report completes)';
+  const task = run.taskBody === null || run.taskBody === undefined
+    ? '<section><h3>Plan</h3><p class="muted">TASK.md is not available for this pass.</p></section>'
+    : '<section><h3>Plan</h3><details class="task-plan">'
+      + `<summary>${escapeHtml(run.title || 'The plan')}</summary>`
+      + `<pre class="prose">${escapeHtml(run.taskBody)}</pre></details></section>`;
 
   return `<article class="run-card ${escapeHtml(run.state)}">`
     + `<header><div><h2>${escapeHtml(run.runId)}</h2><p title="${escapeHtml(run.directory)}">`
@@ -937,6 +970,7 @@ export function renderRunDetail(run) {
     + `<div class="current"><span>Current stage</span><strong>${escapeHtml(run.currentStage ?? 'not started')}</strong>`
     + `<small>${escapeHtml(run.currentType ?? '')}</small><span>Last event</span>`
     + `<strong class="age" data-last-event-ts="${escapeHtml(run.lastEventTs ?? '')}">${escapeHtml(age)}</strong></div>`
+    + task
     + '<section><h3>Verifier seats</h3>'
     + renderVerifier('Correctness pass', run.verifiers.correctness)
     + renderVerifier('Intent pass', run.verifiers.intent) + '</section>'
@@ -1110,6 +1144,8 @@ h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 .verifier-findings{grid-column:1/-1;margin-top:.35rem}
 .verifier-findings h4{font-size:.75rem;margin:.15rem 0}
 .verifier-findings pre,.prose{margin:.2rem 0;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
+.verifier-process-trace{margin-top:.45rem;font-size:.78rem;color:var(--muted)}
+.task-plan>summary{cursor:pointer;font-weight:650}
 .tokens{display:grid;grid-template-columns:auto 1fr;gap:.25rem .6rem;margin:0}
 .tokens dt{font-weight:650}
 .tokens dd{margin:0;color:var(--muted);font-variant-numeric:tabular-nums}

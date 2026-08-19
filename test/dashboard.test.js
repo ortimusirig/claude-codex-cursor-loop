@@ -215,6 +215,45 @@ test('run titles are read from either TASK.md layout and rendered above the shor
   }
 });
 
+test('Detail shows the exact TASK.md in a collapsed plan and an honest missing-file message', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-task-body-'));
+  const withTask = makeRun(root, 'run-with-task', [
+    event('run-with-task', 'report', 'finish', { ts: '2026-08-15T01:00:00.000Z' }),
+  ]);
+  makeRun(root, 'run-without-task', [
+    event('run-without-task', 'report', 'finish', { ts: '2026-08-15T00:00:00.000Z' }),
+  ]);
+  const taskBody = '# Task\r\n\r\nTitle: Show <actual> & "plan"\r\n\r\n- Keep  two spaces.\r\n';
+  writeFileSync(join(withTask.work, 'TASK.md'), taskBody);
+  try {
+    const snapshot = buildDashboardSnapshot({ scratchRoot: root });
+    const taskRun = snapshot.runs.find((run) => run.runId === 'run-with-task');
+    const missingRun = snapshot.runs.find((run) => run.runId === 'run-without-task');
+    assert.equal(taskRun.taskBody, taskBody, 'the digest must retain every TASK.md byte as text');
+    assert.equal(missingRun.taskBody, null);
+
+    const taskHtml = renderRunDetail(taskRun);
+    const expectedPlan = '<details class="task-plan">'
+      + '<summary>Show &lt;actual&gt; &amp; &quot;plan&quot;</summary>'
+      + '<pre class="prose"># Task\r\n\r\nTitle: Show &lt;actual&gt; &amp; &quot;plan&quot;'
+      + '\r\n\r\n- Keep  two spaces.\r\n</pre></details>';
+    assert.ok(taskHtml.includes(expectedPlan),
+      'Detail must escape markup while preserving the full TASK.md text verbatim');
+    assert.doesNotMatch(expectedPlan, /<details[^>]*\sopen(?:\s|>)/,
+      'the plan must be collapsed by default');
+    assert.match(renderRunDetail({ ...taskRun, title: null }),
+      /<details class="task-plan"><summary>The plan<\/summary>/,
+      'a readable task without an extracted title must use the explicit fallback label');
+
+    const missingHtml = renderRunDetail(missingRun);
+    assert.match(missingHtml, /<h3>Plan<\/h3><p class="muted">TASK[.]md is not available for this pass[.]<\/p>/);
+    assert.equal(missingHtml.includes(expectedPlan), false,
+      'positive control: a run without TASK.md must not look like the populated fixture');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('dashboard serves only populated Triage and Detail views, with removed routes returning 404', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-page-'));
   const runId = 'run-current-stage';
@@ -424,6 +463,15 @@ test('dashboard shows both labelled reviews, provenance, consistency, and ration
       'the correctness pass must be labelled and include its retained text');
     assert.match(html, /Intent pass findings[\s\S]*Intent review found the requested failure path missing/,
       'the intent pass must be labelled and include its findings');
+    assert.ok(html.includes('<div class="verifier-findings">'
+      + '<h4>Correctness pass retained output (not authoritative reviewer findings)</h4>'
+      + '<pre>Correctness output retained without a terminal marker.</pre></div>'),
+      'fail-safe fallback must keep findings as immediately visible primary content');
+    assert.ok(html.includes('<div class="verifier-findings"><h4>Intent pass findings</h4>'
+      + '<pre>Intent review found the requested failure path missing.</pre></div>'),
+      'ordinary fallback must keep findings as immediately visible primary content');
+    assert.doesNotMatch(html, /<details class="verifier-process-trace">/,
+      'findings-only fallbacks must remain primary instead of being collapsed');
     assert.match(html, /Correctness pass[\s\S]*Consistency: consistent/);
     assert.match(html, /Intent pass[\s\S]*Consistency: disagreement/);
     assert.match(html, /Executor rationale[\s\S]*Kept the local diff intact/);
@@ -436,6 +484,60 @@ test('dashboard shows both labelled reviews, provenance, consistency, and ration
     assert.match(html, /Intent[\s\S]*out 7/);
   } finally {
     await dashboard?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('verifier reports are primary and distinct findings remain collapsed process traces', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-verifier-plans-'));
+  const runId = 'run-verifier-plans';
+  const run = makeRun(root, runId, [
+    event(runId, 'verify', 'finish', {
+      pass: 'correctness', verdict: 'NO_BLOCKERS', source: 'assistant',
+    }),
+    event(runId, 'verify', 'finish', {
+      pass: 'intent', verdict: 'ISSUES', source: 'none',
+    }),
+    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
+  ]);
+  const correctnessPlan = '## Correctness\nSpecific <check> passed & stayed covered.\n\n## Verdict\nNO_BLOCKERS';
+  const correctnessFindings = 'I will inspect CHANGES.diff before reviewing correctness.';
+  const intentPlan = '## Intent\nA specific requirement was not met.\n\n## Verdict\nISSUES';
+  const intentFindings = 'I will read TASK.md and narrate each intent-review step.';
+  writeFileSync(join(run.work, 'ccc-runfacts.json'), JSON.stringify({
+    runId,
+    verdict: 'NO_BLOCKERS',
+    verdictSource: 'assistant',
+    verifierPlan: correctnessPlan,
+    verifierFindings: correctnessFindings,
+    intentVerdict: 'ISSUES',
+    intentVerdictSource: 'none',
+    intentVerifierPlan: intentPlan,
+    intentVerifierFindings: intentFindings,
+  }));
+  try {
+    const [digested] = buildDashboardSnapshot({ runDirectory: run.directory }).runs;
+    assert.equal(digested.verifiers.correctness.plan, correctnessPlan);
+    assert.equal(digested.verifiers.intent.plan, intentPlan);
+    const html = renderRunDetail(digested);
+    const correctnessBlock = '<div class="verifier-findings"><h4>Correctness pass report</h4>'
+      + '<pre>## Correctness\nSpecific &lt;check&gt; passed &amp; stayed covered.\n\n## Verdict\nNO_BLOCKERS</pre>'
+      + '<details class="verifier-process-trace"><summary>Process trace</summary>'
+      + `<pre>${correctnessFindings}</pre></details></div>`;
+    assert.ok(html.includes(correctnessBlock),
+      'ordinary rendering must show the report before its distinguishable process trace');
+
+    const intentBlock = '<div class="verifier-findings">'
+      + '<h4>Intent pass retained report (not authoritative reviewer findings)</h4>'
+      + `<pre>${intentPlan}</pre>`
+      + '<details class="verifier-process-trace"><summary>Process trace</summary>'
+      + `<pre>${intentFindings}</pre></details></div>`;
+    assert.ok(html.includes(intentBlock),
+      'fail-safe rendering must show the report before its distinguishable process trace');
+    assert.equal((html.match(/<details class="verifier-process-trace">/g) ?? []).length, 2);
+    assert.doesNotMatch(html, /<details class="verifier-process-trace"[^>]*\sopen(?:\s|>)/,
+      'both process traces must be collapsed by default');
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
