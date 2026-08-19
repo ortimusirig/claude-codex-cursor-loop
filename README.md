@@ -279,6 +279,12 @@ Install the GitHub CLI, authenticate it once with `gh auth login`, and configure
 node bin/loop.js publish /path/to/completed/run/w
 ```
 
+Publishing also requires `gitleaks` on `PATH` and a readable newline-delimited blocklist
+whose path is set in `CCC_PUBLISH_BLOCKLIST`. Keep that blocklist outside the repository so
+the confidential identifiers it contains cannot themselves be published. `trufflehog` is
+optional and advisory; its absence is reported as a warning. A missing or unusable blocking
+prerequisite refuses the publish instead of silently skipping its check.
+
 The command pushes the reviewed branch, creates or updates one pull request, posts each
 verifier pass as its own attributable comment, prints the PR URL, and records it in
 `ccc-github.json`. The pull-request body includes the executor rationale, outcome, gate

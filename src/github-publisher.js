@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { HARNESS_ARTIFACTS } from './artifacts.js';
+import { guardPublish } from './publish-guard.js';
 import { commandExists, spawnCapture } from './spawn.js';
 
 export const GITHUB_NOTE_FILENAME = 'ccc-github.json';
@@ -458,6 +459,34 @@ export async function publishRunToGitHub({
   if (!await hasCommand(ghBin)) {
     throw new Error('GitHub CLI (`gh`) is not installed; install it from https://cli.github.com/ and retry');
   }
+
+  const completed = readCompletedRun(runDirectory);
+  const content = buildPullRequestContent({ facts: completed.facts, task: completed.task });
+  if (content.passes.some((pass) => pass.verdict === 'n/a' || pass.source === 'n/a')) {
+    throw new Error('completed run does not contain both verifier verdicts and sources');
+  }
+  const guard = adapters.guardPublish ?? guardPublish;
+  const guardResult = await guard({
+    runDirectory: completed.directory,
+    content,
+    env,
+    adapters,
+  });
+  for (const warning of guardResult.warnings ?? []) {
+    console.warn(`publish guard: ${warning}`);
+  }
+  for (const advisory of guardResult.advisories ?? []) {
+    console.warn(
+      `publish guard advisory: ${advisory.check} ${advisory.surface} ${advisory.rule}`,
+    );
+  }
+  if (!guardResult.ok) {
+    const lines = (guardResult.findings ?? [])
+      .map((finding) => `  ${finding.check} [${finding.surface}]: ${finding.rule}`)
+      .join('\n');
+    throw new Error(`publish refused by the confidentiality guard:\n${lines}`);
+  }
+
   const runCommand = adapters.runCommand ?? spawnCapture;
   let auth;
   try {
@@ -469,12 +498,7 @@ export async function publishRunToGitHub({
     throw new Error('GitHub CLI is not authenticated; run `gh auth login` and retry');
   }
 
-  const completed = readCompletedRun(runDirectory);
   const remote = await findGitHubRemote(completed.directory, runCommand);
-  const content = buildPullRequestContent({ facts: completed.facts, task: completed.task });
-  if (content.passes.some((pass) => pass.verdict === 'n/a' || pass.source === 'n/a')) {
-    throw new Error('completed run does not contain both verifier verdicts and sources');
-  }
   const existing = await findOpenPull({
     runCommand, ghBin, env, repository: remote.repository, branch: completed.facts.branch,
   });

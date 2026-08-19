@@ -23,6 +23,10 @@ import { spawnCapture } from '../src/spawn.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 const fakeGh = fileURLToPath(new URL('../fixtures/fake-gh.mjs', import.meta.url));
+const fakePublishGuardTool = fileURLToPath(
+  new URL('../fixtures/fake-publish-guard-tool.mjs', import.meta.url),
+);
+const fakePublishGuardBinDirectory = fileURLToPath(new URL('../fixtures/', import.meta.url));
 const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
 
 function factsFixture(baseCommit) {
@@ -140,7 +144,9 @@ function shellQuote(value) {
 function fakeGhEnvironment(root, overrides = {}) {
   const shims = join(root, 'bin');
   const statePath = join(root, 'gh-state.json');
+  const blocklistPath = join(root, 'publish-blocklist.txt');
   mkdirSync(shims, { recursive: true });
+  writeFileSync(blocklistPath, 'NeverMatchFixtureClient\n');
   let executable;
   if (process.platform === 'win32') {
     executable = join(shims, 'gh.cmd');
@@ -152,22 +158,100 @@ function fakeGhEnvironment(root, overrides = {}) {
       `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fakeGh)} "$@"\n`,
     );
     chmodSync(executable, 0o755);
+    for (const tool of ['gitleaks', 'trufflehog', 'agent']) {
+      const toolPath = join(shims, tool);
+      writeFileSync(
+        toolPath,
+        `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fakePublishGuardTool)} ${tool} "$@"\n`,
+      );
+      chmodSync(toolPath, 0o755);
+    }
   }
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const guardBinDirectory = process.platform === 'win32'
+    ? fakePublishGuardBinDirectory
+    : shims;
   return {
     executable,
     statePath,
     env: {
       ...process.env,
-      [pathKey]: `${shims}${delimiter}${process.env[pathKey] ?? ''}`,
+      [pathKey]: `${guardBinDirectory}${delimiter}${shims}${delimiter}${process.env[pathKey] ?? ''}`,
       CCC_FAKE_GH_STATE: statePath,
       CCC_GH_BIN: executable,
+      CCC_PUBLISH_BLOCKLIST: blocklistPath,
       ...overrides,
     },
   };
 }
 
 const noOpPush = async () => 'b'.repeat(40);
+const cleanGuard = async () => ({ ok: true, findings: [], advisories: [], warnings: [] });
+
+test('publish refuses and makes no network call when the guard finds something', async (t) => {
+  const fixture = await createRunFixture();
+  t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+  const calls = [];
+
+  await assert.rejects(() => publishRunToGitHub({
+    runDirectory: fixture.runDirectory,
+    adapters: {
+      commandExists: () => true,
+      guardPublish: async () => ({
+        ok: false,
+        findings: [{ check: 'gitleaks', surface: 'code', rule: 'aws-access-key' }],
+        advisories: [],
+        warnings: [],
+      }),
+      prepareAndPushBranch: async () => { calls.push('push'); },
+      runCommand: async (bin, args) => {
+        calls.push(`${bin} ${args.join(' ')}`);
+        return { code: 0, stdout: '{}', stderr: '' };
+      },
+    },
+  }), /aws-access-key/);
+  assert.ok(!calls.includes('push'), 'no branch push may occur after a guard refusal');
+  assert.ok(!calls.some((call) => call.startsWith('gh ')),
+    'no gh call may occur after a guard refusal');
+});
+
+test('publish proceeds when the guard passes', async (t) => {
+  const fixture = await createRunFixture();
+  const fake = fakeGhEnvironment(fixture.root);
+  t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+  let pushed = false;
+
+  await publishRunToGitHub({
+    runDirectory: fixture.runDirectory,
+    ghBin: fake.executable,
+    env: fake.env,
+    adapters: {
+      guardPublish: cleanGuard,
+      prepareAndPushBranch: async () => { pushed = true; return 'abc123'; },
+    },
+  });
+  assert.equal(pushed, true);
+});
+
+test('a guard refusal never prints a secret value', async (t) => {
+  const fixture = await createRunFixture();
+  t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
+
+  await assert.rejects(() => publishRunToGitHub({
+    runDirectory: fixture.runDirectory,
+    adapters: {
+      commandExists: () => true,
+      guardPublish: async () => ({
+        ok: false,
+        findings: [{ check: 'gitleaks', surface: 'code', rule: 'aws-access-key' }],
+        advisories: [],
+        warnings: [],
+      }),
+      prepareAndPushBranch: async () => {},
+      runCommand: async () => ({ code: 0, stdout: '{}', stderr: '' }),
+    },
+  }), (error) => !/AKIA/.test(error.message));
+});
 
 test('GitHub publish preconditions have distinct actionable failures', async (t) => {
   const fixture = await createRunFixture({ githubRemote: false });
