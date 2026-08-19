@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  buildPullRequestContent,
   prepareAndPushBranch,
   publishRunToGitHub,
 } from '../src/github-publisher.js';
@@ -168,6 +169,16 @@ function fakeGhEnvironment(root, overrides = {}) {
 }
 
 const noOpPush = async () => 'b'.repeat(40);
+
+test('the pull request body carries no recorded event content', () => {
+  const content = buildPullRequestContent({
+    facts: factsFixture('a'.repeat(40)),
+    task: '# Task\n\nTitle: example\n',
+  });
+  assert.ok(!content.body.includes('aggregated_output'));
+  assert.ok(!content.body.includes('outputEncoding'));
+  assert.ok(!/exit \d+ · recorded/.test(content.body));
+});
 
 test('GitHub publish preconditions have distinct actionable failures', async (t) => {
   const fixture = await createRunFixture({ githubRemote: false });

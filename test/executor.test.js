@@ -11,6 +11,7 @@ import {
   runExecutor,
   parseCodexStream,
 } from '../src/executor.js';
+import { decodeRecordedText } from '../src/execution-record.js';
 import {
   addUsage,
   checkUsageConsistency,
@@ -23,6 +24,22 @@ const fakeCodex = fileURLToPath(new URL('../fixtures/fake-codex.mjs', import.met
 const schemaSamplePath = fileURLToPath(new URL('../fixtures/codex-stream-schema-sample.ndjson', import.meta.url));
 const usageSamplePath = fileURLToPath(new URL('../fixtures/codex-exec-usage-sample.ndjson', import.meta.url));
 const cursorPlanSamplePath = fileURLToPath(new URL('../fixtures/cursor-plan-mode-sample.ndjson', import.meta.url));
+
+async function runFakeExecutorStream(lines) {
+  const events = [];
+  const script = `for (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + "\\n")`;
+  await runExecutor({
+    plan: 'observe the supplied stream',
+    cwd: tmpdir(),
+    bin: process.execPath,
+    extraArgv: ['-e', script],
+    reporter: (event) => events.push(event),
+    runId: 'recorded-stream',
+    attempt: 1,
+    timeoutMs: 5000,
+  });
+  return events;
+}
 
 test('buildCodexArgs pins model, effort, disables MCP, and defaults to workspace-write', async () => {
   // The pin belongs here, spelled out: a test that avoided the literal would stop being
@@ -99,6 +116,90 @@ test('runExecutor reports a completed item before the vendor process exits', asy
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('a command_execution item records its command line and exit code', async () => {
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: {
+      id: '1', type: 'command_execution',
+      command: 'node --test', aggregated_output: 'ok\n', exit_code: 0, status: 'completed',
+    } },
+  ]);
+  const recorded = events.find((event) => event.itemType === 'command_execution');
+  assert.equal(recorded.command, 'node --test');
+  assert.equal(recorded.exitCode, 0);
+  assert.equal(recorded.output, 'ok\n');
+  assert.equal(recorded.outputEncoding, 'plain');
+});
+
+test('a non-zero exit code is recorded', async () => {
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: {
+      id: '2', type: 'command_execution',
+      command: 'node --test', aggregated_output: 'fail\n', exit_code: 1, status: 'completed',
+    } },
+  ]);
+  assert.equal(events.find((event) => event.itemType === 'command_execution').exitCode, 1);
+});
+
+test('an error item records its message', async () => {
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: { id: '3', type: 'error', message: 'rate limited' } },
+  ]);
+  assert.equal(events.find((event) => event.itemType === 'error').errorMessage, 'rate limited');
+});
+
+test('an agent_message item records its text', async () => {
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: { id: '4', type: 'agent_message', text: 'done' } },
+  ]);
+  const recorded = events.find((event) => event.itemType === 'agent_message');
+  assert.equal(recorded.text, 'done');
+  assert.equal(recorded.textEncoding, 'plain');
+});
+
+test('large command output is stored compressed', async () => {
+  const big = 'y'.repeat(5000);
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: {
+      id: '5', type: 'command_execution',
+      command: 'noisy', aggregated_output: big, exit_code: 0, status: 'completed',
+    } },
+  ]);
+  const recorded = events.find((event) => event.itemType === 'command_execution');
+  assert.equal(recorded.outputEncoding, 'br+b64');
+  assert.equal(decodeRecordedText({
+    text: recorded.output,
+    encoding: recorded.outputEncoding,
+    truncated: recorded.outputTruncated,
+  }).text, big);
+});
+
+test('file_change events still report their path unchanged', async () => {
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: {
+      id: '6', type: 'file_change', status: 'completed',
+      changes: [{ path: 'src/a.js', kind: 'modify' }],
+    } },
+  ]);
+  assert.ok(events.some((event) => event.file === 'src/a.js'));
+});
+
+test('a mutation pin sequence is reconstructible in order', async () => {
+  const events = await runFakeExecutorStream([
+    { type: 'item.completed', item: { id: '7', type: 'file_change', status: 'completed',
+      changes: [{ path: 'src/target.js', kind: 'modify' }] } },
+    { type: 'item.completed', item: { id: '8', type: 'command_execution',
+      command: 'node --test', aggregated_output: 'fail', exit_code: 1, status: 'completed' } },
+    { type: 'item.completed', item: { id: '9', type: 'file_change', status: 'completed',
+      changes: [{ path: 'src/target.js', kind: 'modify' }] } },
+    { type: 'item.completed', item: { id: '10', type: 'command_execution',
+      command: 'node --test', aggregated_output: 'pass', exit_code: 0, status: 'completed' } },
+  ]);
+  const shape = events
+    .filter((event) => event.file !== undefined || event.exitCode !== undefined)
+    .map((event) => (event.file !== undefined ? `file:${event.file}` : `exit:${event.exitCode}`));
+  assert.deepEqual(shape, ['file:src/target.js', 'exit:1', 'file:src/target.js', 'exit:0']);
 });
 
 test('parseCodexStream handles the real wrapped item.completed schema, ignores errors and item.started', () => {

@@ -166,6 +166,24 @@ test('every touched file is a body wikilink and unrelated events are ignored', (
   assert.doesNotMatch(body, /not-this-run/);
 });
 
+test('the journal note carries no recorded event content', () => {
+  const note = buildRunJournalNote(fixtureFacts, [
+    ...fixtureEvents,
+    {
+      runId: fixtureFacts.runId,
+      stage: 'executor',
+      type: 'item_completed',
+      itemType: 'command_execution',
+      command: 'secret-command --token abc',
+      exitCode: 0,
+      output: 'sensitive output',
+      outputEncoding: 'plain',
+    },
+  ]);
+  assert.ok(!note.includes('secret-command'));
+  assert.ok(!note.includes('sensitive output'));
+});
+
 test('gate failures are conditional and both verifier passes remain distinguishable', () => {
   const withGate = buildRunJournalNote(fixtureFacts, fixtureEvents);
   assert.match(withGate, /## Gate failure/);

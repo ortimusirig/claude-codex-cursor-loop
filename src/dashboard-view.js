@@ -11,6 +11,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CCC_DASHBOARD_MARKER } from './dashboard-config.js';
 import { CAMPAIGN_EVENTS_FILENAME, readEventStream } from './event-stream.js';
+import { decodeRecordedText } from './execution-record.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
 
 export const DEFAULT_SESSION_THRESHOLD_HOURS = 2;
@@ -400,6 +401,16 @@ function digestRunDirectory(runDirectory) {
       attempt: event.attempt ?? null,
       pass: event.pass ?? null,
       verdict: event.verdict ?? null,
+      itemType: typeof event.itemType === 'string' ? event.itemType : null,
+      command: typeof event.command === 'string' ? event.command : null,
+      exitCode: Number.isInteger(event.exitCode) ? event.exitCode : null,
+      output: typeof event.output === 'string' ? event.output : null,
+      outputEncoding: typeof event.outputEncoding === 'string' ? event.outputEncoding : null,
+      outputTruncated: event.outputTruncated === true,
+      errorMessage: typeof event.errorMessage === 'string' ? event.errorMessage : null,
+      text: typeof event.text === 'string' ? event.text : null,
+      textEncoding: typeof event.textEncoding === 'string' ? event.textEncoding : null,
+      textTruncated: event.textTruncated === true,
     })),
     verifiers: completedDetails.verifiers,
     files,
@@ -857,9 +868,45 @@ function renderTimeline(timeline) {
       event.verdict ? `verdict ${escapeHtml(event.verdict)}` : '',
       event.attempt === null ? '' : `attempt ${escapeHtml(event.attempt)}`,
     ].filter(Boolean).join(' · ');
+    let executionRecord = '';
+    if (event.stage === 'executor' && event.type === 'item_completed') {
+      if (event.itemType === 'command_execution') {
+        const command = typeof event.command === 'string'
+          ? `<code>${escapeHtml(event.command)}</code>`
+          : '';
+        const exitCode = Number.isInteger(event.exitCode)
+          ? `<span class="${event.exitCode === 0 ? 'exit-ok' : 'exit-fail'}">exit ${escapeHtml(event.exitCode)}</span>`
+          : '';
+        const heading = command === '' && exitCode === '' ? ''
+          : `<div class="executor-record-heading">${command}${exitCode}</div>`;
+        const decoded = decodeRecordedText({
+          text: event.output,
+          encoding: event.outputEncoding,
+          truncated: event.outputTruncated,
+        });
+        const output = decoded.text === '' ? ''
+          : '<details class="executor-record"><summary>Recorded output'
+            + `${decoded.truncated ? ' · truncated' : ''}</summary>`
+            + `<pre>${escapeHtml(decoded.text)}</pre></details>`;
+        executionRecord = heading + output;
+      } else if (event.itemType === 'error' && typeof event.errorMessage === 'string') {
+        executionRecord = `<p class="executor-error">${escapeHtml(event.errorMessage)}</p>`;
+      } else if (event.itemType === 'agent_message') {
+        const decoded = decodeRecordedText({
+          text: event.text,
+          encoding: event.textEncoding,
+          truncated: event.textTruncated,
+        });
+        if (decoded.text !== '') {
+          executionRecord = '<details class="executor-record"><summary>Agent text'
+            + `${decoded.truncated ? ' · truncated' : ''}</summary>`
+            + `<pre>${escapeHtml(decoded.text)}</pre></details>`;
+        }
+      }
+    }
     return `<li><time>${escapeHtml(shortTime(event.ts))}</time>`
       + `<b>${escapeHtml(event.stage)}</b><span>${escapeHtml(event.type)}</span>`
-      + (details ? `<small>${details}</small>` : '') + '</li>';
+      + (details ? `<small>${details}</small>` : '') + executionRecord + '</li>';
   }).join('')}</ol>`;
 }
 
@@ -1028,7 +1075,14 @@ export function snapshotForClient(snapshot) {
       currentStage: run.currentStage,
       currentType: run.currentType,
       lastEventTs: run.lastEventTs,
-      timeline: run.timeline,
+      timeline: run.timeline.map((event) => ({
+        ts: event.ts,
+        stage: event.stage,
+        type: event.type,
+        attempt: event.attempt,
+        pass: event.pass,
+        verdict: event.verdict,
+      })),
       files: run.files.map((file) => ({
         ...file,
         attemptText: `attempt ${file.attempt ?? '?'}`,
@@ -1167,6 +1221,12 @@ h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 .timeline li{display:grid;grid-template-columns:4.8rem 5.5rem 1fr;gap:.35rem;border-left:2px solid var(--line);padding:.25rem .5rem}
 .timeline time,.timeline span,.timeline small{color:var(--muted)}
 .timeline small{grid-column:2/-1}
+.executor-record-heading,.executor-error,.executor-record{grid-column:2/-1}
+.executor-record-heading{display:flex;justify-content:space-between;gap:.7rem}
+.executor-record-heading code{overflow-wrap:anywhere}
+.executor-error{margin:.15rem 0;color:var(--bad)}
+.executor-record>summary{cursor:pointer;font-size:.75rem;font-weight:650;margin:.15rem 0}
+.executor-record pre{margin:.2rem 0;max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.55rem;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .diff-capped{padding:.6rem;background:var(--soft);border-left:3px solid var(--warn)}
 .diff-file{background:var(--card);border:1px solid var(--line);border-radius:7px;margin:.7rem 0;overflow:hidden}
 .diff-file>summary{cursor:pointer;padding:.7rem .85rem}

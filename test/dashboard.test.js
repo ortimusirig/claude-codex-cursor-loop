@@ -18,6 +18,7 @@ import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
 import { startDashboard } from '../src/dashboard.js';
+import { encodeRecordedText } from '../src/execution-record.js';
 import {
   buildDashboardSnapshot,
   DEFAULT_SESSION_THRESHOLD_HOURS,
@@ -48,6 +49,22 @@ function makeRun(root, runId, events, suffix = '') {
   writeFileSync(join(work, 'events.jsonl'), `${events.map(JSON.stringify).join('\n')}`
     + (events.length > 0 ? '\n' : '') + suffix);
   return { directory, work, eventsPath: join(work, 'events.jsonl') };
+}
+
+function displayRunWithEvents(events) {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-execution-record-'));
+  const runId = 'execution-record-run';
+  try {
+    const recorded = events.map((fields, index) => ({
+      ts: `2026-08-19T00:00:${String(index).padStart(2, '0')}.000Z`,
+      runId,
+      ...fields,
+    }));
+    const run = makeRun(root, runId, recorded);
+    return buildDashboardSnapshot({ runDirectory: run.directory }).runs[0];
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 async function page(dashboard) {
@@ -263,6 +280,57 @@ test('Detail shows the exact TASK.md in a collapsed plan and an honest missing-f
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('Detail renders a recorded command line and exit code', () => {
+  const run = displayRunWithEvents([
+    { stage: 'executor', type: 'item_completed', itemType: 'command_execution',
+      command: 'node --test', exitCode: 1, output: 'boom', outputEncoding: 'plain' },
+  ]);
+  const html = renderRunDetail(run);
+  assert.match(html, /node --test/);
+  assert.match(html, /exit 1/);
+  assert.match(html, /boom/);
+});
+
+test('Detail decodes compressed output rather than showing base64', () => {
+  const big = 'z'.repeat(5000);
+  const encoded = encodeRecordedText(big);
+  const run = displayRunWithEvents([
+    { stage: 'executor', type: 'item_completed', itemType: 'command_execution',
+      command: 'noisy', exitCode: 0, output: encoded.text, outputEncoding: encoded.encoding },
+  ]);
+  const html = renderRunDetail(run);
+  assert.ok(!html.includes(encoded.text), 'raw base64 must never be rendered');
+  assert.match(html, /zzzz/);
+});
+
+test('Detail shows a recorded error message', () => {
+  const run = displayRunWithEvents([
+    { stage: 'executor', type: 'item_completed', itemType: 'error',
+      errorMessage: 'rate limited' },
+  ]);
+  assert.match(renderRunDetail(run), /rate limited/);
+});
+
+test('Detail decodes recorded agent text', () => {
+  const encoded = encodeRecordedText('agent result '.repeat(300));
+  const run = displayRunWithEvents([
+    { stage: 'executor', type: 'item_completed', itemType: 'agent_message',
+      text: encoded.text, textEncoding: encoded.encoding },
+  ]);
+  const html = renderRunDetail(run);
+  assert.ok(!html.includes(encoded.text), 'raw base64 must never be rendered');
+  assert.match(html, /agent result/);
+});
+
+test('a corrupt encoded payload degrades to a message instead of throwing', () => {
+  const run = displayRunWithEvents([
+    { stage: 'executor', type: 'item_completed', itemType: 'command_execution',
+      command: 'x', exitCode: 0, output: 'garbage', outputEncoding: 'br+b64' },
+  ]);
+  assert.doesNotThrow(() => renderRunDetail(run));
+  assert.match(renderRunDetail(run), /could not be decoded/i);
 });
 
 test('dashboard serves only populated Triage and Detail views, with removed routes returning 404', async () => {

@@ -1,5 +1,6 @@
 import { spawnCapture } from './spawn.js';
 import { reportEvent } from './events.js';
+import { encodeRecordedText } from './execution-record.js';
 import { annotateUsageConsistency, EMPTY_USAGE, normalizeCodexUsage } from './usage.js';
 import { resolveStageTimeouts } from './timeouts.js';
 import { StringDecoder } from 'node:string_decoder';
@@ -68,7 +69,6 @@ export function parseCodexStream(streamText) {
 
 function createIncrementalReporter({ reporter, runId, attempt }) {
   const decoder = new StringDecoder('utf8');
-  const seenFiles = new Set();
   let pending = '';
 
   const observeLine = (line) => {
@@ -81,6 +81,7 @@ function createIncrementalReporter({ reporter, runId, attempt }) {
     const item = event.item;
     let reported = false;
     if (item.type === 'file_change' && Array.isArray(item.changes)) {
+      const seenFiles = new Set();
       for (const change of item.changes) {
         if (!change || typeof change.path !== 'string' || seenFiles.has(change.path)) continue;
         seenFiles.add(change.path);
@@ -93,9 +94,30 @@ function createIncrementalReporter({ reporter, runId, attempt }) {
     // Every completed item is observable activity. A file-change item already reports its
     // paths; all other items (and duplicate/empty file-change items) get one progress event.
     if (!reported) {
-      reportEvent(reporter, runId, 'executor', 'item_completed', {
-        itemType: typeof item.type === 'string' ? item.type : 'unknown', attempt,
-      });
+      const itemType = typeof item.type === 'string' ? item.type : 'unknown';
+      const fields = { itemType, attempt };
+      if (itemType === 'command_execution') {
+        if (typeof item.command === 'string') fields.command = item.command;
+        if (Number.isInteger(item.exit_code)) fields.exitCode = item.exit_code;
+        const output = encodeRecordedText(item.aggregated_output);
+        if (output.text !== '') {
+          fields.output = output.text;
+          fields.outputEncoding = output.encoding;
+          if (output.truncated) fields.outputTruncated = true;
+        }
+      }
+      if (itemType === 'error' && typeof item.message === 'string') {
+        fields.errorMessage = item.message;
+      }
+      if (itemType === 'agent_message') {
+        const text = encodeRecordedText(item.text);
+        if (text.text !== '') {
+          fields.text = text.text;
+          fields.textEncoding = text.encoding;
+          if (text.truncated) fields.textTruncated = true;
+        }
+      }
+      reportEvent(reporter, runId, 'executor', 'item_completed', fields);
     }
   };
 
