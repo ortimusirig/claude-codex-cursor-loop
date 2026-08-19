@@ -171,13 +171,36 @@ function fakeGhEnvironment(root, overrides = {}) {
 const noOpPush = async () => 'b'.repeat(40);
 
 test('the pull request body carries no recorded event content', () => {
+  const recordedCommand = {
+    type: 'item_completed',
+    itemType: 'command_execution',
+    command: 'RECORDED-COMMAND-MARKER --do-not-publish',
+    exitCode: 8675309,
+    output: 'RECORDED-OUTPUT-MARKER',
+  };
+  const recordedError = {
+    type: 'item_completed',
+    itemType: 'error',
+    errorMessage: 'RECORDED-ERROR-MARKER',
+  };
+  const facts = factsFixture('a'.repeat(40));
+  facts.iterations.at(-1).events = [recordedCommand, recordedError];
   const content = buildPullRequestContent({
-    facts: factsFixture('a'.repeat(40)),
+    facts,
     task: '# Task\n\nTitle: example\n',
   });
-  assert.ok(!content.body.includes('aggregated_output'));
-  assert.ok(!content.body.includes('outputEncoding'));
-  assert.ok(!/exit \d+ · recorded/.test(content.body));
+  assert.ok(content.body.length > 0, 'pull request body must be built');
+  assert.ok(content.body.includes(facts.iterations.at(-1).lastMessage),
+    'pull request body must include the executor rationale');
+  for (const [field, value] of [
+    ['command', recordedCommand.command],
+    ['exitCode', recordedCommand.exitCode],
+    ['output', recordedCommand.output],
+    ['errorMessage', recordedError.errorMessage],
+  ]) {
+    assert.ok(!content.body.includes(String(value)),
+      `pull request body must not leak recorded ${field} marker: ${value}`);
+  }
 });
 
 test('GitHub publish preconditions have distinct actionable failures', async (t) => {
