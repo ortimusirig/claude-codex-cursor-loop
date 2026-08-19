@@ -941,10 +941,15 @@ test('client reveals a requested Detail section only after its asynchronous fetc
   };
   const scrolls = [];
   const highlightClasses = new Map();
-  const anchors = Object.fromEntries(['gate', 'correctness', 'intent'].map((section) => {
+  const anchorIds = {
+    gate: 'detail-gate',
+    correctness: 'detail-verifier-correctness',
+    intent: 'detail-verifier-intent',
+  };
+  const anchors = Object.fromEntries(Object.entries(anchorIds).map(([section, id]) => {
     const classes = new Set();
     highlightClasses.set(section, classes);
-    return [section, {
+    return [id, {
       querySelector(selector) {
         assert.equal(selector, 'details.verifier-findings');
         return reports[section] ?? null;
@@ -975,8 +980,7 @@ test('client reveals a requested Detail section only after its asynchronous fetc
       getElementById(id) {
         if (elements[id]) return elements[id];
         if (!detailLoaded) return null;
-        const section = id.replace(/^detail-(?:verifier-)?/, '');
-        return anchors[section] ?? null;
+        return anchors[id] ?? null;
       },
       querySelectorAll() { return []; },
     },
