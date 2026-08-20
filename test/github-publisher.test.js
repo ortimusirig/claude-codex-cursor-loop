@@ -178,9 +178,9 @@ function fakeGhEnvironment(root, overrides = {}) {
     env: {
       ...process.env,
       [pathKey]: `${guardBinDirectory}${delimiter}${shims}${delimiter}${process.env[pathKey] ?? ''}`,
-      CCC_FAKE_GH_STATE: statePath,
-      CCC_GH_BIN: executable,
-      CCC_PUBLISH_BLOCKLIST: blocklistPath,
+      URO_FAKE_GH_STATE: statePath,
+      URO_GH_BIN: executable,
+      URO_PUBLISH_BLOCKLIST: blocklistPath,
       ...overrides,
     },
   };
@@ -310,7 +310,7 @@ test('GitHub publish preconditions have distinct actionable failures', async (t)
     () => publishRunToGitHub({
       runDirectory: fixture.runDirectory,
       ghBin: fake.executable,
-      env: { ...fake.env, CCC_FAKE_GH_AUTH: 'fail' },
+      env: { ...fake.env, URO_FAKE_GH_AUTH: 'fail' },
     }),
     /not authenticated.*gh auth login/i,
   );
@@ -357,7 +357,7 @@ test('publishing creates one PR, posts two distinguishable pass comments, and re
   assert.match(intent, /^### Reviewer findings$/m);
   assert.match(intent, /The task is covered/);
 
-  const note = JSON.parse(readFileSync(join(fixture.runDirectory, 'ccc-github.json'), 'utf8'));
+  const note = JSON.parse(readFileSync(join(fixture.runDirectory, 'uro-github.json'), 'utf8'));
   assert.equal(note.url, first.url);
   assert.equal(note.pullRequest, 42);
 
@@ -377,7 +377,7 @@ test('publishing creates one PR, posts two distinguishable pass comments, and re
 
 test('a failed publish command exits non-zero cleanly and preserves all run contents', async (t) => {
   const fixture = await createRunFixture();
-  const fake = fakeGhEnvironment(fixture.root, { CCC_FAKE_GH_FAIL: 'pr list' });
+  const fake = fakeGhEnvironment(fixture.root, { URO_FAKE_GH_FAIL: 'pr list' });
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const before = snapshotContents(fixture.runDirectory);
 
@@ -413,7 +413,7 @@ test('the publish CLI prints and records the PR URL without contacting the netwo
   assert.equal(result.signal, null);
   assert.equal(result.stderr, '');
   assert.equal(result.stdout, 'https://github.com/acme/widgets/pull/42\n');
-  const note = JSON.parse(readFileSync(join(fixture.runDirectory, 'ccc-github.json'), 'utf8'));
+  const note = JSON.parse(readFileSync(join(fixture.runDirectory, 'uro-github.json'), 'utf8'));
   assert.equal(note.url, result.stdout.trim());
   assert.equal(note.repository, 'acme/widgets');
   assert.equal(

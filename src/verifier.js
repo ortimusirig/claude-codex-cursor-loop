@@ -21,8 +21,8 @@ export function assertNoForbiddenFlags(args) {
   }
 }
 
-export const DEFAULT_PROMPT = '/ccc-verify Read CHANGES.diff and judge the change for correctness and blocking bugs; make the final line exactly NO_BLOCKERS or exactly ISSUES.';
-export const INTENT_PROMPT = '/ccc-verify Read TASK.md and CHANGES.diff and judge whether the diff fully implements every TASK.md requirement and whether new or changed assertions detect broken behavior; make the final line exactly NO_BLOCKERS or exactly ISSUES.';
+export const DEFAULT_PROMPT = '/uro-verify Read CHANGES.diff and judge the change for correctness and blocking bugs; make the final line exactly NO_BLOCKERS or exactly ISSUES.';
+export const INTENT_PROMPT = '/uro-verify Read TASK.md and CHANGES.diff and judge whether the diff fully implements every TASK.md requirement and whether new or changed assertions detect broken behavior; make the final line exactly NO_BLOCKERS or exactly ISSUES.';
 
 export function assertUsablePrompt(prompt) {
   if (prompt.includes('"')) throw new Error('verifier prompt must not contain a double quote');

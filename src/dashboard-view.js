@@ -9,10 +9,11 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CCC_DASHBOARD_MARKER } from './dashboard-config.js';
+import { URO_DASHBOARD_MARKER } from './dashboard-config.js';
 import { CAMPAIGN_EVENTS_FILENAME, readEventStream } from './event-stream.js';
 import { decodeRecordedText } from './execution-record.js';
 import { addUsage, EMPTY_USAGE } from './usage.js';
+import { resolveArtifact } from './artifacts.js';
 
 export const DEFAULT_SESSION_THRESHOLD_HOURS = 2;
 export const MAX_RENDERED_DIFF_BYTES = 128 * 1024;
@@ -75,7 +76,7 @@ function emptyRun(directory, overrides = {}) {
 
 function readRunFacts(eventsPath) {
   if (eventsPath === null) return null;
-  const factsPath = join(dirname(eventsPath), 'ccc-runfacts.json');
+  const factsPath = resolveArtifact(dirname(eventsPath), 'uro-runfacts.json');
   if (!existsSync(factsPath)) return null;
   try {
     const facts = JSON.parse(readFileSync(factsPath, { encoding: 'utf8', flag: 'r' }));
@@ -1241,7 +1242,7 @@ h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 </style>
 </head>
 <body>
-<header><div><h1>${CCC_DASHBOARD_MARKER}</h1><p>${escapeHtml(snapshot.sourcePath)}</p></div><span id="connection" class="connection">Connecting…</span></header>
+<header><div><h1>${URO_DASHBOARD_MARKER}</h1><p>${escapeHtml(snapshot.sourcePath)}</p></div><span id="connection" class="connection">Connecting…</span></header>
 <main id="runs">${renderDashboardContent(snapshot)}</main>
 <script id="initial-dashboard-data" type="application/json">${jsonForInlineScript(snapshotForClient(snapshot))}</script>
 <script>${clientScript()}</script>

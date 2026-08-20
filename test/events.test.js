@@ -32,7 +32,7 @@ import { runVerifier as realVerifier } from '../src/verifier.js';
 
 const fakeWriter = fileURLToPath(new URL('../fixtures/fake-codex-writer.mjs', import.meta.url));
 const fakeAgent = fileURLToPath(new URL('../fixtures/fake-agent.mjs', import.meta.url));
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -77,7 +77,7 @@ test('exporting detailFor preserves the exact heartbeat summary phrasing', () =>
   assert.equal(detailFor(event), 'npm test code=0');
   assert.equal(
     formatEventSummary(event),
-    '[ccc] 2026-08-15T00:00:00.000Z gate/gate_command npm test code=0',
+    '[uroboros] 2026-08-15T00:00:00.000Z gate/gate_command npm test code=0',
   );
 });
 
@@ -150,7 +150,7 @@ test('stage transitions and executor file changes reach the reporter in order', 
       event.stage === 'isolate' && event.type === 'finish'
     ));
     assert.equal(isolateFinish.baseRef, 'HEAD');
-    assert.equal(isolateFinish.branch, 'ccc/ordered-events');
+    assert.equal(isolateFinish.branch, 'uro/ordered-events');
     assert.match(isolateFinish.baseCommit, /^[0-9a-f]{40,64}$/);
   } finally {
     rmSync(tgt, { recursive: true, force: true });
@@ -404,7 +404,7 @@ test('fully exercised runs have exact pair equality with both event vocabularies
     });
 
     const journalFacts = result.units[0].facts;
-    generatedNote = generateRunJournal(join(journalFacts.dir, 'ccc-runfacts.json'), {
+    generatedNote = generateRunJournal(join(journalFacts.dir, 'uro-runfacts.json'), {
       reporter: (event) => journalEvents.push(event),
     }).notePath;
 

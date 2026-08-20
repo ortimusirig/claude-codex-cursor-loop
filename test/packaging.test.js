@@ -15,7 +15,7 @@ const runPath = fileURLToPath(new URL('../src/run.js', import.meta.url));
 const dashboardLauncherPath = fileURLToPath(new URL('../src/dashboard-launcher.js', import.meta.url));
 const logdyConfigPath = fileURLToPath(new URL('../docs/optional-tools/logdy-run-events.json', import.meta.url));
 const verifierPluginManifestPath = fileURLToPath(new URL('../cursor-plugin/.cursor-plugin/plugin.json', import.meta.url));
-const verifierSkillPath = fileURLToPath(new URL('../cursor-plugin/skills/ccc-verify/SKILL.md', import.meta.url));
+const verifierSkillPath = fileURLToPath(new URL('../cursor-plugin/skills/uro-verify/SKILL.md', import.meta.url));
 
 test('the repository ships a substantive MIT license', () => {
   assert.ok(existsSync(licensePath), 'LICENSE must exist at the repository root');
@@ -87,15 +87,15 @@ test('run imports only the dashboard launcher, never the server or view', () => 
     'the explicit dashboard command must keep lazily loading the server');
 });
 
-test('the shipped ccc-verify skill carries the strict verdict and assertion-audit contracts', () => {
+test('the shipped uro-verify skill carries the strict verdict and assertion-audit contracts', () => {
   assert.ok(existsSync(verifierPluginManifestPath), 'the local Cursor plugin manifest must exist');
-  assert.ok(existsSync(verifierSkillPath), 'the ccc-verify SKILL.md must exist');
+  assert.ok(existsSync(verifierSkillPath), 'the uro-verify SKILL.md must exist');
   const manifest = JSON.parse(readFileSync(verifierPluginManifestPath, 'utf8'));
   const skill = readFileSync(verifierSkillPath, 'utf8');
 
-  assert.equal(manifest.name, 'ccc-verify');
-  assert.match(skill, /^---\r?\nname: ccc-verify\r?\n[\s\S]*?\r?\n---\r?\n/,
-    'the skill must have valid ccc-verify YAML frontmatter');
+  assert.equal(manifest.name, 'uro-verify');
+  assert.match(skill, /^---\r?\nname: uro-verify\r?\n[\s\S]*?\r?\n---\r?\n/,
+    'the skill must have valid uro-verify YAML frontmatter');
   assert.match(skill,
     /## Verdict contract — mandatory[\s\S]*final non-empty line must be exactly\s+`NO_BLOCKERS` or exactly `ISSUES`, alone on its own line/,
     'the contract must require an authoritative bare token on the final line');

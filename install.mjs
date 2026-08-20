@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Verifier and instruction printer for the c-cube-loop Claude Code plugin.
+// Verifier and instruction printer for the uroboros Claude Code plugin.
 // Cross-platform, zero dependencies, and deliberately hands Claude Code ownership
 // of its marketplace, plugin, and settings state.
 //
@@ -23,7 +23,7 @@ const SRC = dirname(fileURLToPath(import.meta.url));
 const META_DIRECTORY = join(SRC, '.claude-plugin');
 const PLUGIN_MANIFEST = join(META_DIRECTORY, 'plugin.json');
 const MARKETPLACE_MANIFEST = join(META_DIRECTORY, 'marketplace.json');
-const PLUGIN_SKILL = join(SRC, 'skills', 'c-cube-loop', 'SKILL.md');
+const PLUGIN_SKILL = join(SRC, 'skills', 'uroboros', 'SKILL.md');
 
 // This inventory defines the source payload whose readability the verifier checks.
 const PAYLOAD = [
@@ -42,10 +42,10 @@ for (const arg of args) {
 }
 
 const skillsDirectory = join(homedir(), '.claude', 'skills');
-const currentPersonalDest = join(skillsDirectory, 'c-cube-loop');
+const currentPersonalDest = join(skillsDirectory, 'uroboros');
 // Keep the superseded name constructible for upgrade detection without retaining it as
 // this package's identifier in source metadata or documentation.
-const previousSkillName = ['claude', 'codex', 'cursor', 'loop'].join('-');
+const previousSkillName = ['c', 'cube', 'loop'].join('-');
 const previousDest = join(skillsDirectory, previousSkillName);
 
 const major = Number(process.versions.node.split('.')[0]);
@@ -133,7 +133,7 @@ function validatePlugin() {
   const marketplace = readJson(MARKETPLACE_MANIFEST, 'marketplace manifest');
   const pkg = readJson(join(SRC, 'package.json'), 'package manifest');
 
-  if (plugin.name !== 'c-cube-loop') throw new Error('plugin.json name must be c-cube-loop');
+  if (plugin.name !== 'uroboros') throw new Error('plugin.json name must be uroboros');
   if (plugin.name !== pkg.name) throw new Error('plugin.json and package.json names disagree');
   if (plugin.version !== pkg.version) throw new Error('plugin.json and package.json versions disagree');
   if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) {
@@ -159,7 +159,7 @@ function validatePlugin() {
   }
   const entry = marketplace.plugins[0];
   if (entry.name !== plugin.name || entry.source !== './') {
-    throw new Error('marketplace plugin must be named c-cube-loop with source "./"');
+    throw new Error('marketplace plugin must be named uroboros with source "./"');
   }
 
   for (const component of ['commands', 'skills']) {
@@ -172,7 +172,7 @@ function validatePlugin() {
     }
   }
   if (existsSync(join(SRC, 'SKILL.md'))) {
-    throw new Error('the plugin skill must be moved to skills/c-cube-loop/SKILL.md');
+    throw new Error('the plugin skill must be moved to skills/uroboros/SKILL.md');
   }
   if (!existsSync(PLUGIN_SKILL)) throw new Error(`plugin skill is missing: ${PLUGIN_SKILL}`);
   if (frontmatter(PLUGIN_SKILL).name !== plugin.name) {
@@ -253,7 +253,7 @@ function printPluginInstructions(marketplaceName) {
   const escapedSource = SRC.replaceAll('"', '\\"');
   console.log('\nRun these exact commands inside Claude Code:');
   console.log(`  /plugin marketplace add "${escapedSource}"`);
-  console.log(`  /plugin install c-cube-loop@${marketplaceName}`);
+  console.log(`  /plugin install uroboros@${marketplaceName}`);
 }
 
 let manifests;
@@ -274,12 +274,12 @@ console.log(`plugin validation: PASS (${CLI_COMMANDS.length} commands, 1 skill)`
 warnAboutSkillDirectory(
   currentPersonalDest,
   'personal skill install detected',
-  'That directory duplicates the c-cube-loop skill provided by this plugin.',
+  'That directory duplicates the uroboros skill provided by this plugin.',
 );
 warnAboutSkillDirectory(
   previousDest,
   'previous skill install detected',
-  'That directory is now superseded by c-cube-loop and would leave the host with two equivalent skills.',
+  'That directory is now superseded by uroboros and would leave the host with two equivalent skills.',
 );
 
 console.log(`payload: ${payload.length} source files readable by SHA-256`);

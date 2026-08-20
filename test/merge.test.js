@@ -17,7 +17,7 @@ import { runGate } from '../src/gate.js';
 import { MERGE_LEDGER_FILENAME, TEST_COUNT_FLOOR_BIN } from '../src/merge.js';
 import { spawnCapture } from '../src/spawn.js';
 
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -258,10 +258,10 @@ test('a text conflict reaches the executor with named paths and ledgers the reso
       reason: 'callers require the left prefix and right suffix together',
       parentUnitId: 'conflict-right',
     }]);
-    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'uro-runfacts.json'), 'utf8'));
     assert.equal(persisted.merge.resolutions[0].chosen,
       'retain both contracts in composed order');
-    const report = readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8');
+    const report = readFileSync(join(facts.dir, 'uro-report.md'), 'utf8');
     assert.match(report, /shared[.]txt[\s\S]*retain both contracts[\s\S]*left prefix and right suffix/i);
   } finally {
     cleanup(dirs);

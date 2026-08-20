@@ -1,4 +1,4 @@
-ccc doctor
+uroboros doctor
 
 Required checks:
 PASS [required] Node version: 24.9.0 meets >=24

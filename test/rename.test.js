@@ -19,11 +19,11 @@ import { CLI_COMMANDS } from '../src/cli-help.js';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const installerPath = fileURLToPath(new URL('../install.mjs', import.meta.url));
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
-const skillPath = fileURLToPath(new URL('../skills/c-cube-loop/SKILL.md', import.meta.url));
+const skillPath = fileURLToPath(new URL('../skills/uroboros/SKILL.md', import.meta.url));
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url));
 const workflowPath = fileURLToPath(new URL('../.github/workflows/tests.yml', import.meta.url));
-const currentName = 'c-cube-loop';
-const previousName = ['claude', 'codex', 'cursor', 'loop'].join('-');
+const currentName = 'uroboros';
+const previousName = ['c', 'cube', 'loop'].join('-');
 
 function frontmatter(path) {
   const text = readFileSync(path, 'utf8');
@@ -69,7 +69,7 @@ function expectedRemovalCommand(path) {
   return `rm -rf -- '${path.replaceAll("'", "'\\''")}'`;
 }
 
-test('package and skill identifiers are c-cube-loop and shipped text has no stale identifier', () => {
+test('package and skill identifiers are uroboros and shipped text has no stale identifier', () => {
   const pkg = JSON.parse(readFileSync(packagePath, 'utf8'));
   const skill = frontmatter(skillPath);
   assert.equal(pkg.name, currentName);
@@ -98,10 +98,10 @@ test('package and skill identifiers are c-cube-loop and shipped text has no stal
 
 test('README names the renamed repository and contains no superseded repository name', () => {
   const readme = readFileSync(readmePath, 'utf8');
-  assert.ok(readme.includes('ortimusirig/c-cube-loop'),
+  assert.ok(readme.includes('ortimusirig/uroboros'),
     'positive control: README must contain the current GitHub owner and repository');
   assert.ok(readme.includes(
-    '[![tests](https://github.com/ortimusirig/c-cube-loop/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/c-cube-loop/actions/workflows/tests.yml)',
+    '[![tests](https://github.com/ortimusirig/uroboros/actions/workflows/tests.yml/badge.svg)](https://github.com/ortimusirig/uroboros/actions/workflows/tests.yml)',
   ), 'the CI badge and link must use the renamed repository');
   assert.equal(readme.includes(previousName), false,
     'README must contain no occurrence of the superseded repository name');
@@ -185,7 +185,7 @@ test('installer warns about a superseded install without deleting it and is sile
     assert.equal(present.status, 0, output(present));
     assert.match(output(present), /WARNING: previous skill install detected:/);
     assert.ok(output(present).includes(previousPath), 'the warning must name the old directory');
-    assert.match(output(present), /superseded by c-cube-loop/);
+    assert.match(output(present), /superseded by uroboros/);
     assert.ok(output(present).includes(expectedRemovalCommand(previousPath)),
       'the warning must print the exact platform removal command');
     assert.ok(existsSync(previousPath), 'the installer must not remove the previous install');
@@ -204,8 +204,8 @@ test('README teaches marketplace installation first and retains the contributor 
   assert.ok(codeBlocks.length > 0, 'README must contain a copyable install block');
   assert.equal(codeBlocks[0][1], 'text', 'the primary install commands run in Claude Code');
   assert.deepEqual(codeBlocks[0][2].split(/\r?\n/), [
-    '/plugin marketplace add ortimusirig/c-cube-loop',
-    '/plugin install c-cube-loop@c-cube-loop',
+    '/plugin marketplace add ortimusirig/uroboros',
+    '/plugin install uroboros@uroboros',
   ]);
   const beforePrimaryCommands = readme.slice(0, codeBlocks[0].index);
   assert.match(beforePrimaryCommands, /inside Claude Code \(not a terminal\)/);
@@ -217,17 +217,17 @@ test('README teaches marketplace installation first and retains the contributor 
     'the contributor/development heading must follow the primary install');
   const development = readme.slice(developmentHeading);
   assert.match(development,
-    /only for people who intend to work on the project[\s\S]*only intend to\s+use c-cube-loop[\s\S]*instead of cloning/i);
+    /only for people who intend to work on the project[\s\S]*only intend to\s+use uroboros[\s\S]*instead of cloning/i);
   const checkoutBlock = /```sh\r?\n([\s\S]*?)\r?\n```/.exec(development);
   assert.ok(checkoutBlock, 'the contributor/development section must retain the checkout path');
   const lines = checkoutBlock[1].split(/\r?\n/);
   assert.deepEqual(lines, [
-    'git clone https://github.com/ortimusirig/c-cube-loop.git c-cube-loop',
-    'cd c-cube-loop',
+    'git clone https://github.com/ortimusirig/uroboros.git uroboros',
+    'cd uroboros',
     'node install.mjs',
     'node bin/loop.js doctor',
-    'node bin/loop.js init ../ccc-loop-demo',
-    'node bin/loop.js run --task ../ccc-loop-demo/plan.md --target ../ccc-loop-demo --gate ../ccc-loop-demo/gate.json',
+    'node bin/loop.js init ../uroboros-demo',
+    'node bin/loop.js run --task ../uroboros-demo/plan.md --target ../uroboros-demo --gate ../uroboros-demo/gate.json',
   ]);
 
   const loopArgv = lines.slice(3).map((line) => line.split(' ').slice(2));
@@ -236,5 +236,51 @@ test('README teaches marketplace installation first and retains the contributor 
   for (const argv of loopArgv) {
     assert.ok(CLI_COMMANDS.includes(argv[0]), `${argv[0]} is absent from the real command list`);
     assert.equal(parseArgs(argv).command, argv[0], `${argv[0]} is documented but not accepted by the parser`);
+  }
+});
+
+test('the reference documentation files exist and are substantial', () => {
+  for (const relative of ['docs/usage.md', 'docs/publishing.md']) {
+    const path = fileURLToPath(new URL(`../${relative}`, import.meta.url));
+    assert.ok(existsSync(path), `${relative} must exist`);
+    assert.ok(readFileSync(path, 'utf8').trim().length > 500,
+      `${relative} must hold real reference content, not a stub`);
+  }
+});
+
+test('every relative link in README resolves to a file that exists', () => {
+  const readme = readFileSync(readmePath, 'utf8');
+  const targets = [...readme.matchAll(/]\(([^)]+)\)/g)]
+    .map((match) => match[1])
+    .filter((href) => !/^(https?:|#|mailto:)/.test(href))
+    .map((href) => href.split('#')[0])
+    .filter((href) => href !== '');
+  assert.ok(targets.length > 0,
+    'positive control: README must link to at least one local file');
+  for (const target of targets) {
+    const path = fileURLToPath(new URL(`../${target}`, import.meta.url));
+    assert.ok(existsSync(path), `README links to a missing file: ${target}`);
+  }
+});
+
+test('commands documented in docs/usage.md are accepted by the real parser', () => {
+  const usagePath = fileURLToPath(new URL('../docs/usage.md', import.meta.url));
+  const usage = readFileSync(usagePath, 'utf8');
+  const documented = [...usage.matchAll(/^\s*node bin\/loop\.js ([a-z]+)/gm)]
+    .map((match) => match[1]);
+  const requiredArgv = new Map([
+    ['run', ['run', '--task', 'write docs', '--target', '.', '--gate', 'gate.json']],
+    ['batch', ['batch', '--task', 'write docs', '--target', '.', '--gate', 'gate.json']],
+    ['status', ['status', 'run-directory']],
+    ['publish', ['publish', 'run-directory']],
+    ['init', ['init', 'demo-directory']],
+  ]);
+  assert.ok(documented.length > 0,
+    'positive control: docs/usage.md must document at least one command invocation');
+  for (const command of new Set(documented)) {
+    assert.ok(CLI_COMMANDS.includes(command),
+      `${command} is documented but absent from the real command list`);
+    assert.equal(parseArgs(requiredArgv.get(command) ?? [command]).command, command,
+      `${command} is documented but not accepted by the parser`);
   }
 });

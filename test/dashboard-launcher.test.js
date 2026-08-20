@@ -24,7 +24,7 @@ function close(server) {
 }
 
 test('default launch starts a detached scratch-root dashboard and announces its URL', async () => {
-  const probes = ['vacant', 'ccc'];
+  const probes = ['vacant', 'uroboros'];
   const spawns = [];
   const child = new EventEmitter();
   let unrefCount = 0;
@@ -55,14 +55,14 @@ test('default launch starts a detached scratch-root dashboard and announces its 
   assert.match(announcement, /^=== CCC DASHBOARD ===/);
   assert.match(announcement, /http:\/\/127[.]0[.]0[.]1:48123\//);
   assert.match(announcement, /read-only/i);
-  assert.doesNotMatch(announcement, /^\[ccc\]/);
+  assert.doesNotMatch(announcement, /^\[uroboros\]/);
 });
 
-test('--no-dashboard and CCC_NO_DASHBOARD=1 perform no probe or spawn', async () => {
+test('--no-dashboard and URO_NO_DASHBOARD=1 perform no probe or spawn', async () => {
   let probes = 0;
   let spawns = 0;
   const dependencies = {
-    probe: async () => { probes += 1; return { status: 'ccc' }; },
+    probe: async () => { probes += 1; return { status: 'uroboros' }; },
     spawn: () => { spawns += 1; throw new Error('must not spawn'); },
   };
 
@@ -70,7 +70,7 @@ test('--no-dashboard and CCC_NO_DASHBOARD=1 perform no probe or spawn', async ()
     ...dependencies, env: {}, disabled: true,
   });
   const envResult = await launchDashboard('C:/scratch', {
-    ...dependencies, env: { CCC_NO_DASHBOARD: '1' },
+    ...dependencies, env: { URO_NO_DASHBOARD: '1' },
   });
 
   assert.deepEqual(flagResult, { status: 'disabled' });
@@ -157,7 +157,7 @@ test('spawn and browser failures are contained as plain launcher results', async
     env: {},
     port: 48125,
     open: true,
-    probe: async () => ({ status: 'ccc' }),
+    probe: async () => ({ status: 'uroboros' }),
     openBrowser: () => { browserCalls += 1; throw new Error('headless'); },
   });
   assert.equal(reused.status, 'reused');
@@ -177,7 +177,7 @@ test('--open uses the platform browser launcher without attaching it to the run'
     child.unref = () => { unrefCount += 1; };
     const result = await launchDashboard('C:/scratch', {
       env: {}, port: 48126, open: true, platform,
-      probe: async () => ({ status: 'ccc' }),
+      probe: async () => ({ status: 'uroboros' }),
       spawnBrowser: (...args) => { calls.push(args); return child; },
     });
     assert.equal(result.status, 'reused');

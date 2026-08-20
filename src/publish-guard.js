@@ -5,6 +5,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { HARNESS_ARTIFACTS } from './artifacts.js';
 import { commandExists, spawnCapture } from './spawn.js';
 import { buildCursorArgs } from './verifier.js';
+import { readEnv } from './env-compat.js';
 
 export function assembleProseSurface(content) {
   const parts = [content.title ?? '', content.body ?? ''];
@@ -22,7 +23,7 @@ export function checkBlocklist({ prose, codeText, blocklistPath, readFile }) {
       findings: [{
         check: 'blocklist',
         surface: 'config',
-        rule: 'CCC_PUBLISH_BLOCKLIST is not set, so the blocklist check could not run',
+        rule: 'URO_PUBLISH_BLOCKLIST is not set, so the blocklist check could not run',
       }],
     };
   }
@@ -373,7 +374,7 @@ export async function guardPublish({
     const blocklist = checkBlocklist({
       prose,
       codeText,
-      blocklistPath: env?.CCC_PUBLISH_BLOCKLIST,
+      blocklistPath: readEnv(env, 'PUBLISH_BLOCKLIST'),
       readFile,
     });
     result.findings.push(...blocklist.findings);

@@ -46,9 +46,9 @@ test('buildCodexArgs pins model, effort, disables MCP, and defaults to workspace
   // able to detect a changed default, which is the only thing this line is for.
   assert.equal(DEFAULT_EXECUTOR_MODEL, 'gpt-5.6-sol');
   assert.equal(DEFAULT_EXECUTOR_EFFORT, 'xhigh');
-  const hadSandboxOverride = Object.hasOwn(process.env, 'CCC_CODEX_SANDBOX');
-  const sandboxOverride = process.env.CCC_CODEX_SANDBOX;
-  delete process.env.CCC_CODEX_SANDBOX;
+  const hadSandboxOverride = Object.hasOwn(process.env, 'URO_CODEX_SANDBOX');
+  const sandboxOverride = process.env.URO_CODEX_SANDBOX;
+  delete process.env.URO_CODEX_SANDBOX;
   try {
     const isolatedModule = await import(`../src/executor.js?default-sandbox=${Date.now()}`);
     const a = isolatedModule.buildCodexArgs({ cwd: 'C:/w' }).join(' ');
@@ -60,7 +60,7 @@ test('buildCodexArgs pins model, effort, disables MCP, and defaults to workspace
     assert.match(a, /-s workspace-write/, 'the confining mode stays the default');
     assert.doesNotMatch(a, /--ignore-user-config/, 'must never discard project trust');
   } finally {
-    if (hadSandboxOverride) process.env.CCC_CODEX_SANDBOX = sandboxOverride;
+    if (hadSandboxOverride) process.env.URO_CODEX_SANDBOX = sandboxOverride;
   }
 });
 

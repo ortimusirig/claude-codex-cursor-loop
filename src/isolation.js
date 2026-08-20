@@ -16,6 +16,10 @@ import { spawnCapture } from './spawn.js';
 
 const repositoryLocks = new Map();
 
+export function defaultBranchName(runId) {
+  return `uro/${runId}`;
+}
+
 export function assertSafeScratchRoot(root) {
   const segs = root.replace(/\\/g, '/').toLowerCase().split('/');
   for (const s of segs) {
@@ -329,7 +333,7 @@ export async function isolate({
   if (suppliedBranch !== undefined && branchName !== undefined && suppliedBranch !== branchName) {
     throw new Error('branch and branchName must match when both are supplied');
   }
-  const branch = suppliedBranch ?? branchName ?? `ccc/${runId}`;
+  const branch = suppliedBranch ?? branchName ?? defaultBranchName(runId);
   reportEvent(reporter, runId, 'isolate', 'start', {
     source: target,
     baseRef,

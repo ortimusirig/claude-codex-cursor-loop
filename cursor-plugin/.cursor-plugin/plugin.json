@@ -1,5 +1,5 @@
 {
-  "name": "ccc-verify",
+  "name": "uro-verify",
   "version": "1.0.0",
   "description": "Strict correctness, intent, and assertion auditing for ccc verifier passes"
 }

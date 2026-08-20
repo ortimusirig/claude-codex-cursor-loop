@@ -298,7 +298,7 @@ async function runGuardFixture(t, { codeText, contextualVerdict = 'CLEAN' }) {
   const result = await guardPublish({
     runDirectory,
     content,
-    env: { CCC_PUBLISH_BLOCKLIST: blocklistPath },
+    env: { URO_PUBLISH_BLOCKLIST: blocklistPath },
     adapters: {
       temporaryDirectory: root,
       randomUUID: () => 'fixed',

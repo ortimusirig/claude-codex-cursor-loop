@@ -13,7 +13,7 @@ import { runCampaign } from '../src/campaign.js';
 import { exitCodeFor } from '../src/exit.js';
 import { spawnCapture } from '../src/spawn.js';
 
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -151,7 +151,7 @@ test('Mode A candidates overlap from one repository and base while retaining dis
     result.units.forEach((entry, index) => {
       assert.match(diffs[index], new RegExp(`${entry.unitId}[.]txt`));
       assert.equal(entry.facts.perspective, entry.perspective);
-      const persisted = JSON.parse(readFileSync(join(entry.facts.dir, 'ccc-runfacts.json'), 'utf8'));
+      const persisted = JSON.parse(readFileSync(join(entry.facts.dir, 'uro-runfacts.json'), 'utf8'));
       assert.equal(persisted.perspective, entry.perspective);
     });
 

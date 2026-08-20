@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
-const statePath = process.env.CCC_FAKE_GH_STATE;
+const statePath = process.env.URO_FAKE_GH_STATE;
 if (!statePath) {
-  process.stderr.write('CCC_FAKE_GH_STATE is required\n');
+  process.stderr.write('URO_FAKE_GH_STATE is required\n');
   process.exitCode = 2;
 } else {
   const state = existsSync(statePath)
@@ -23,11 +23,11 @@ if (!statePath) {
 
   if (command === 'auth status') {
     save();
-    if (process.env.CCC_FAKE_GH_AUTH === 'fail') {
+    if (process.env.URO_FAKE_GH_AUTH === 'fail') {
       process.stderr.write('not logged in\n');
       process.exitCode = 1;
     }
-  } else if (process.env.CCC_FAKE_GH_FAIL === command) {
+  } else if (process.env.URO_FAKE_GH_FAIL === command) {
     save();
     process.stderr.write(`configured failure for ${command}\n`);
     process.exitCode = 1;

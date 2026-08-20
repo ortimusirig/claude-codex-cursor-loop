@@ -5,7 +5,7 @@ disable-model-invocation: true
 
 Act as the controller for this invocation.
 
-Before doing anything, read and obey `${CLAUDE_PLUGIN_ROOT}/skills/c-cube-loop/SKILL.md`,
+Before doing anything, read and obey `${CLAUDE_PLUGIN_ROOT}/skills/uroboros/SKILL.md`,
 especially its governing law. The planner authors the plan. Codex implements it. The planner
 never writes the implementation.
 

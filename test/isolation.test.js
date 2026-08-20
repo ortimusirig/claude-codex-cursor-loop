@@ -11,13 +11,18 @@ import {
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnCapture } from '../src/spawn.js';
-import { assertSafeScratchRoot, hashTree, isolate } from '../src/isolation.js';
+import {
+  assertSafeScratchRoot,
+  defaultBranchName,
+  hashTree,
+  isolate,
+} from '../src/isolation.js';
 
 // Scratch base must satisfy assertSafeScratchRoot: NOT under AppData or OneDrive.
 // os.tmpdir() is under AppData on Windows and process.cwd() is under OneDrive for a
 // checkout that lives in a synced folder — both are rejected by the guard. Mirror the
 // production default from bin/loop.js, which is safe by the same construction.
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 function makeScratch() {
@@ -69,7 +74,7 @@ test('isolate on a NON-repo folder inits git and leaves the source untouched', a
   assert.ok(existsSync(join(iso.dir, '.git')), 'isolated dir is a git repo');
   assert.ok(existsSync(join(iso.dir, 'file.txt')), 'content copied');
   assert.equal(iso.baseRef, 'HEAD');
-  assert.equal(iso.branch, 'ccc/testrun');
+  assert.equal(iso.branch, 'uro/testrun');
   assert.equal(hashTree(src), before, 'source tree unchanged');
   const log = await spawnCapture('git', ['-C', iso.dir, 'log', '--oneline']);
   assert.match(log.stdout, /baseline/i);
@@ -89,10 +94,16 @@ test('isolate on a git repo creates a worktree and leaves the source untouched',
   assert.equal(iso.isRepo, true);
   assert.ok(existsSync(join(iso.dir, 'f.txt')), 'worktree has the file');
   assert.equal(iso.baseRef, 'HEAD');
-  assert.equal(iso.branch, 'ccc/repotest');
+  assert.equal(iso.branch, 'uro/repotest');
   assert.equal(hashTree(src), before, 'source tree unchanged');
   await iso.cleanup();
   rmSync(scratch, { recursive: true, force: true });
+});
+
+test('a generated branch uses the uro/ prefix', () => {
+  const branch = defaultBranchName('2026-08-20T00-00-00-000Z-abcdef12');
+  assert.equal(branch, 'uro/2026-08-20T00-00-00-000Z-abcdef12');
+  assert.doesNotMatch(branch, /^ccc\//, 'the superseded prefix must not be generated');
 });
 
 test('an explicit base ref produces that tree rather than the different HEAD tree', async () => {

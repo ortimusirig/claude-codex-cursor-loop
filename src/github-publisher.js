@@ -10,11 +10,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { HARNESS_ARTIFACTS } from './artifacts.js';
+import { HARNESS_ARTIFACTS, resolveArtifact } from './artifacts.js';
 import { guardPublish } from './publish-guard.js';
 import { commandExists, spawnCapture } from './spawn.js';
 
-export const GITHUB_NOTE_FILENAME = 'ccc-github.json';
+export const GITHUB_NOTE_FILENAME = 'uro-github.json';
 const COMMAND_TIMEOUT_MS = 60_000;
 
 function outputDetail(result) {
@@ -47,7 +47,7 @@ function readCompletedRun(runDirectory) {
   }
   if (!stat.isDirectory()) throw new Error(`run directory is not a directory: ${directory}`);
 
-  const factsPath = join(directory, 'ccc-runfacts.json');
+  const factsPath = resolveArtifact(directory, 'uro-runfacts.json');
   let facts;
   try {
     facts = JSON.parse(readFileSync(factsPath, 'utf8'));
@@ -260,7 +260,7 @@ export async function prepareAndPushBranch({
   remoteUrl,
   runCommand = spawnCapture,
 }) {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'ccc-github-publish-'));
+  const tempRoot = mkdtempSync(join(tmpdir(), 'uro-github-publish-'));
   const tempRepository = join(tempRoot, 'repository');
   const disabledHooks = join(tempRoot, 'disabled-hooks');
   const baseCommit = facts.merge?.mergeBase ?? facts.baseCommit;

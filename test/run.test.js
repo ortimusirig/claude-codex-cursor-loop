@@ -25,7 +25,7 @@ function makeTarget(withFile = true) {
 // os.tmpdir() is under AppData on Windows and process.cwd() is under OneDrive for a
 // checkout that lives in a synced folder — both are rejected by the guard. Mirror the
 // production default from bin/loop.js, which is safe by the same construction.
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 const scratch = () => {
@@ -71,7 +71,7 @@ test('correctness and intent findings are separately lifted while verdict is mer
   assert.equal(facts.intentVerifierPlan, null);
   assert.equal(facts.baseRef, 'HEAD');
   assert.match(facts.baseCommit, /^[0-9a-f]{40,64}$/);
-  assert.equal(facts.branch, 'ccc/f1');
+  assert.equal(facts.branch, 'uro/f1');
   assert.deepEqual(verifierCalls.map((call) => call.prompt), [DEFAULT_PROMPT, INTENT_PROMPT]);
   rmSync(scr, { recursive: true, force: true });
 });
@@ -192,10 +192,10 @@ test('a retained-evidence disagreement is reported without failing a completed r
     assert.equal(facts.verifierConsistency.status, 'disagreement');
     assert.equal(facts.verifierConsistency.recordedVerdict, 'NO_BLOCKERS');
     assert.equal(facts.verifierConsistency.rederivedVerdict, 'ISSUES');
-    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'uro-runfacts.json'), 'utf8'));
     assert.equal(persisted.verifierConsistency.status, 'disagreement');
     assert.equal(persisted.iterations[0].verifier.verdictConsistency.status, 'disagreement');
-    const report = readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8');
+    const report = readFileSync(join(facts.dir, 'uro-report.md'), 'utf8');
     assert.match(report, /bookkeeping disagreement/i);
     assert.match(report, /recorded NO_BLOCKERS\/result; re-derived ISSUES\/result/i);
   } finally {
@@ -243,9 +243,9 @@ test('a token invariant violation is reported without failing a completed run', 
     assert.equal(violation.inputTokens, 10);
     assert.equal(violation.cachedInputTokens, 30);
 
-    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'uro-runfacts.json'), 'utf8'));
     assert.equal(persisted.usageConsistency.status, 'disagreement');
-    const report = readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8');
+    const report = readFileSync(join(facts.dir, 'uro-report.md'), 'utf8');
     assert.match(report, /token accounting bookkeeping disagreement/i);
     assert.match(report, /input 10, cached input 30/i);
   } finally {
@@ -555,7 +555,7 @@ test('a timed-out executor stops the run, is recorded, and maps to a non-zero pr
   assert.deepEqual(facts.timeoutEvents, [
     { stage: 'executor', iteration: 1, attempt: 1, timeoutMs: 25 },
   ]);
-  assert.match(readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8'),
+  assert.match(readFileSync(join(facts.dir, 'uro-report.md'), 'utf8'),
     /executor: timed out after 25 ms/i);
   rmSync(scr, { recursive: true, force: true });
 });
@@ -605,7 +605,7 @@ test('a timed-out gate command is distinguishable in run facts and the report', 
     bin: 'node', args: ['--test'],
   }]);
   assert.equal(facts.gateFailure.timedOut, true);
-  const report = readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8');
+  const report = readFileSync(join(facts.dir, 'uro-report.md'), 'utf8');
   assert.match(report, /Gate failure/);
   assert.match(report, /Timed out.*60 ms/i);
   rmSync(scr, { recursive: true, force: true });

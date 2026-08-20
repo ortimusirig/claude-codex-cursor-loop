@@ -20,7 +20,7 @@ import { startDashboard } from '../src/dashboard.js';
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 const fakeCodex = fileURLToPath(new URL('../fixtures/fake-codex.mjs', import.meta.url));
 const fakeAgent = fileURLToPath(new URL('../fixtures/fake-agent.mjs', import.meta.url));
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -58,8 +58,8 @@ function cliFixture() {
   const env = {
     ...process.env,
     [pathKey]: `${shims}${delimiter}${process.env[pathKey] ?? ''}`,
-    CCC_SCRATCH_ROOT: scratchRoot,
-    CCC_NO_DASHBOARD: '1',
+    URO_SCRATCH_ROOT: scratchRoot,
+    URO_NO_DASHBOARD: '1',
   };
   const args = [cli, 'run', '--task', 'Make no real change.', '--target', target,
     '--gate', gate, '--gate-retries', '0'];
@@ -68,7 +68,7 @@ function cliFixture() {
 
 function withDashboardEnabled(env) {
   const enabled = { ...env };
-  delete enabled.CCC_NO_DASHBOARD;
+  delete enabled.URO_NO_DASHBOARD;
   return enabled;
 }
 
@@ -171,25 +171,25 @@ test('a real CLI run announces a read-only dashboard before executor events and 
     assert.equal(r.stdout, `${JSON.stringify(facts, null, 2)}\n`,
       'stdout must contain exactly the one formatted run-facts document');
     assert.equal(facts.outcome, 'no-op');
-    assert.match(r.stderr, /^\[ccc\].*isolate\/start/m,
+    assert.match(r.stderr, /^\[uroboros\].*isolate\/start/m,
       'positive control: the heartbeat must actually be emitted');
-    assert.match(r.stderr, /^\[ccc\].*executor\/file_change/m);
+    assert.match(r.stderr, /^\[uroboros\].*executor\/file_change/m);
     assert.match(r.stderr, new RegExp(`Watch live: ${dashboard.url.replaceAll('.', '[.]')}`));
     assert.match(r.stderr, /read-only/i);
     // indexOf returns -1 when the banner is absent, and -1 < <any positive index> is true,
     // so comparing them directly FAILS OPEN: the ordering check passed with no banner at
     // all. Require both positions to exist before comparing them.
     const bannerAt = r.stderr.indexOf('=== CCC DASHBOARD ===');
-    const executorAt = r.stderr.search(/^\[ccc\].*executor\/start/m);
+    const executorAt = r.stderr.search(/^\[uroboros\].*executor\/start/m);
     assert.ok(bannerAt >= 0, 'the prominent dashboard banner must be printed');
     assert.ok(executorAt >= 0, 'positive control: the executor event must be in the stream');
     assert.ok(bannerAt < executorAt,
       'the prominent dashboard announcement must precede executor launch');
-    const eventLines = r.stderr.trim().split(/\r?\n/).filter((line) => line.startsWith('[ccc]'));
+    const eventLines = r.stderr.trim().split(/\r?\n/).filter((line) => line.startsWith('[uroboros]'));
     assert.ok(eventLines.length > 0);
     for (const line of eventLines) {
       assert.ok(line.length <= 300, `heartbeat exceeded its bound: ${line.length}`);
-      assert.match(line, /^\[ccc\] /);
+      assert.match(line, /^\[uroboros\] /);
     }
     const eventPath = join(facts.dir, 'events.jsonl');
     assert.ok(existsSync(eventPath));
@@ -211,7 +211,7 @@ test('--quiet suppresses stderr chatter while dashboard probing and events still
   let requests = 0;
   const existing = createServer((_request, response) => {
     requests += 1;
-    response.end('<h1>CCC live run dashboard</h1>');
+    response.end('<h1>URO live run dashboard</h1>');
   });
   const port = await listen(existing);
   try {
@@ -239,7 +239,7 @@ test('--no-dashboard performs no HTTP probe and announces no dashboard URL', asy
   let requests = 0;
   const markerServer = createServer((_request, response) => {
     requests += 1;
-    response.end('<h1>CCC live run dashboard</h1>');
+    response.end('<h1>URO live run dashboard</h1>');
   });
   const port = await listen(markerServer);
   try {
@@ -250,7 +250,7 @@ test('--no-dashboard performs no HTTP probe and announces no dashboard URL', asy
     assert.equal(JSON.parse(r.stdout).outcome, 'no-op');
     assert.equal(requests, 0, 'the opt-out must skip even the initial port probe');
     assert.doesNotMatch(r.stderr, /CCC DASHBOARD|Watch live:|127[.]0[.]0[.]1/);
-    assert.match(r.stderr, /^\[ccc\].*executor\/start/m,
+    assert.match(r.stderr, /^\[uroboros\].*executor\/start/m,
       'positive control: this run did execute and emit normal event chatter');
   } finally {
     await closeServer(markerServer);
@@ -277,7 +277,7 @@ test('a foreign dashboard port reports the conflict but cannot change run outcom
     assert.match(r.stderr, /Start it manually:/);
     assert.doesNotMatch(r.stderr, new RegExp(`Watch live: http://127[.]0[.]0[.]1:${port}/`),
       'the foreign listener URL must not be claimed as a dashboard');
-    assert.match(r.stderr, /^\[ccc\].*executor\/start/m,
+    assert.match(r.stderr, /^\[uroboros\].*executor\/start/m,
       'the run must proceed normally after dashboard failure');
   } finally {
     await closeServer(foreign);
@@ -311,9 +311,9 @@ test('batch stdout is one aggregate JSON document while heartbeats remain on std
       'stdout must contain exactly one formatted campaign aggregate');
     assert.equal(aggregate.units.length, 2);
     assert.equal(aggregate.rollup.counts.completed, 2);
-    assert.match(r.stderr, /^\[ccc\].*campaign\/start/m,
+    assert.match(r.stderr, /^\[uroboros\].*campaign\/start/m,
       'positive control: campaign heartbeat must actually be emitted');
-    assert.match(r.stderr, /^\[ccc\].*executor\/file_change/m,
+    assert.match(r.stderr, /^\[uroboros\].*executor\/file_change/m,
       'positive control: concurrent unit heartbeats must actually be emitted');
     assert.match(r.stderr, new RegExp(`Watch live: ${dashboard.url.replaceAll('.', '[.]')}`));
     assert.match(r.stderr, /read-only/i);
@@ -321,7 +321,7 @@ test('batch stdout is one aggregate JSON document while heartbeats remain on std
     // so comparing them directly FAILS OPEN: the ordering check passed with no banner at
     // all. Require both positions to exist before comparing them.
     const bannerAt = r.stderr.indexOf('=== CCC DASHBOARD ===');
-    const campaignAt = r.stderr.search(/^\[ccc\].*campaign\/start/m);
+    const campaignAt = r.stderr.search(/^\[uroboros\].*campaign\/start/m);
     assert.ok(bannerAt >= 0, 'the prominent dashboard banner must be printed');
     assert.ok(campaignAt >= 0, 'positive control: the campaign event must be in the stream');
     assert.ok(bannerAt < campaignAt,

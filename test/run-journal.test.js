@@ -14,12 +14,13 @@ import {
   buildRunJournalNote,
   generateRunJournal,
   generateRunJournalCampaign,
+  readRunJournalInput,
 } from '../src/run-journal.js';
 import { runCampaign } from '../src/campaign.js';
 import { run } from '../src/run.js';
 
 const projectRunsDir = fileURLToPath(new URL('../docs/runs/', import.meta.url));
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -209,7 +210,7 @@ test('writing the same run twice is byte-identical and accepts run directory or 
   const scratchRun = join(root, 'scratch', facts.runId);
   const runWorkDir = join(scratchRun, 'w');
   mkdirSync(runWorkDir, { recursive: true });
-  const factsPath = join(runWorkDir, 'ccc-runfacts.json');
+  const factsPath = join(runWorkDir, 'uro-runfacts.json');
   const expectedNotePath = join(projectRunsDir, `${facts.runId}.md`);
   writeFileSync(factsPath, JSON.stringify(facts, null, 2));
   writeFileSync(join(runWorkDir, 'events.jsonl'),
@@ -240,7 +241,7 @@ test('campaign mode recursively regenerates every discovered run', () => {
   for (const facts of runs) {
     const workDir = join(scratchRoot, facts.runId, 'w');
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, 'ccc-runfacts.json'), JSON.stringify(facts));
+    writeFileSync(join(workDir, 'uro-runfacts.json'), JSON.stringify(facts));
   }
 
   try {
@@ -278,7 +279,7 @@ test('journal generation attributes events from run facts written by a real camp
       scratchRoot,
       runOptions: { gateRetries: 0, adapters: noOpAdapters },
     });
-    const factsPath = join(campaign.units[0].facts.dir, 'ccc-runfacts.json');
+    const factsPath = join(campaign.units[0].facts.dir, 'uro-runfacts.json');
     const persisted = JSON.parse(readFileSync(factsPath, 'utf8'));
     assert.deepEqual({
       campaignId: persisted.campaignId,
@@ -324,7 +325,7 @@ test('journal generation leaves standalone run events unattributed', async () =>
       runId,
       adapters: noOpAdapters,
     });
-    const factsPath = join(facts.dir, 'ccc-runfacts.json');
+    const factsPath = join(facts.dir, 'uro-runfacts.json');
     const persisted = JSON.parse(readFileSync(factsPath, 'utf8'));
     for (const field of ['campaignId', 'round', 'unitId', 'campaignUnitKind', 'unitKind']) {
       assert.equal(Object.hasOwn(persisted, field), false,
@@ -346,5 +347,29 @@ test('journal generation leaves standalone run events unattributed', async () =>
     rmSync(notePath, { force: true });
     rmSync(target, { recursive: true, force: true });
     rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test('a run directory holding only the superseded run-facts name is still discoverable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'uro-journal-legacy-'));
+  try {
+    writeFileSync(join(dir, 'ccc-runfacts.json'), JSON.stringify({ runId: 'r1', iterations: [] }));
+    const found = readRunJournalInput(dir).factsPath;
+    assert.equal(found, join(dir, 'ccc-runfacts.json'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a directory holding both names prefers the current one and is not an error', () => {
+  // Positive control: both files coexisting is the normal migration state, not the
+  // "multiple run-facts files" ambiguity the discovery guard is meant to reject.
+  const dir = mkdtempSync(join(tmpdir(), 'uro-journal-both-'));
+  try {
+    writeFileSync(join(dir, 'uro-runfacts.json'), JSON.stringify({ runId: 'current', iterations: [] }));
+    writeFileSync(join(dir, 'ccc-runfacts.json'), JSON.stringify({ runId: 'legacy', iterations: [] }));
+    assert.equal(readRunJournalInput(dir).factsPath, join(dir, 'uro-runfacts.json'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

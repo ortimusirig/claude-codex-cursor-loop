@@ -1,9 +1,9 @@
 ---
-name: c-cube-loop
+name: uroboros
 description: Plan and supervise isolated Codex implementation, true-exit-code gates, Cursor review, and Single, Parallel, Graph, Candidates, or Rounds campaigns; use for campaign execution, diagnostics with doctor, status or dashboard inspection, project initialization, and publishing completed units.
 ---
 
-# c-cube-loop
+# uroboros
 
 ## Governing law
 
@@ -94,7 +94,7 @@ For a simple Graph, keep the flag form: give every task a `--unit-id`, then repe
   path; a verifier-timeout unit can still qualify when both verifier records exist. A child pull
   request uses its parent's branch as its base, so publish the parent branch first.
 - **The execution scratch root is environment-only and flat.** `run` and `batch` take it from
-  `CCC_SCRATCH_ROOT` (or the platform default), not a run flag. Unit worktrees live under the
+`URO_SCRATCH_ROOT` (or the platform default), not a run flag. Unit worktrees live under the
   unit id, so two campaigns that reuse a unit id collide even when they target different
   repositories.
 - **Normal run artifacts persist.** There is no end-of-run or end-of-campaign cleanup for unit
@@ -122,18 +122,18 @@ hazard is reuse of a unit id in the flat scratch root.
 
 Install the plugin from a clone by running `node install.mjs`, then paste the two exact Claude
 Code commands it prints: `/plugin marketplace add <absolute-clone-path>` followed by
-`/plugin install c-cube-loop@c-cube-loop`. The plugin registers these nine namespaced slash
+`/plugin install uroboros@uroboros`. The plugin registers these nine namespaced slash
 commands while the direct Node CLI remains available:
 
-- `/c-cube-loop:run`
-- `/c-cube-loop:batch`
-- `/c-cube-loop:status`
-- `/c-cube-loop:dashboard`
-- `/c-cube-loop:publish`
-- `/c-cube-loop:doctor`
-- `/c-cube-loop:setup`
-- `/c-cube-loop:init`
-- `/c-cube-loop:help`
+- `/uroboros:run`
+- `/uroboros:batch`
+- `/uroboros:status`
+- `/uroboros:dashboard`
+- `/uroboros:publish`
+- `/uroboros:doctor`
+- `/uroboros:setup`
+- `/uroboros:init`
+- `/uroboros:help`
 
 Each slash command is a controller prompt that runs the corresponding `node bin/loop.js`
 command. It is not a shell alias. The command controller must use the child process's true exit
@@ -174,7 +174,7 @@ and `help` to print the command surface.
 - Codex writes inside a Git-isolated copy; the source working tree is not touched.
 - Cursor performs correctness and intent/assertion verification in read-only plan mode, only
   when the gate passed and the diff is non-empty.
-- Output is `ccc-runfacts.json`, `ccc-report.md`, `events.jsonl`, and, for changed work,
+- Output is `uro-runfacts.json`, `uro-report.md`, `events.jsonl`, and, for changed work,
   `CHANGES.diff` in the isolated directory.
 - Outcomes include `review-ready`, `no-op`, `gate-failed`, `verifier-failed`, `timed-out`, and
   Merge-only `conflicting-intent`; campaigns also roll up `campaign-failed` and
@@ -202,7 +202,7 @@ Before invoking the loop, check the plan:
 
 Immediately after starting `run` or `batch`, tell the human the printed dashboard URL and call it
 a read-only view. Do not leave the URL only in captured stderr. `--open` opens it locally; use
-`--no-dashboard` or `CCC_NO_DASHBOARD=1` only when the operator does not want dashboard startup
+`--no-dashboard` or `URO_NO_DASHBOARD=1` only when the operator does not want dashboard startup
 or announcement.
 
 Keep watching the event stream or dashboard. On roughly a 30-minute cadence, also read

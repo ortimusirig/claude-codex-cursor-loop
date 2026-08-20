@@ -1,6 +1,6 @@
 # Publish Confidentiality Guard Implementation Plan
 
-> **For agentic workers:** This plan is executed by the c-cube-loop. Codex implements in an
+> **For agentic workers:** This plan is executed by uroboros. Codex implements in an
 > isolated worktree, the gate verifies by true exit code, and Cursor reviews read-only. The
 > planner never implements.
 

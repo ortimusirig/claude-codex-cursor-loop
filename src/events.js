@@ -391,7 +391,7 @@ export function formatEventSummary(event, maxLength = MAX_EVENT_SUMMARY_LENGTH) 
   if (!Number.isSafeInteger(maxLength) || maxLength < 16) {
     throw new TypeError('maxLength must be a safe integer of at least 16');
   }
-  const prefix = `[ccc] ${oneLine(event?.ts)} ${oneLine(event?.stage)}/${oneLine(event?.type)}`;
+  const prefix = `[uroboros] ${oneLine(event?.ts)} ${oneLine(event?.stage)}/${oneLine(event?.type)}`;
   const detail = detailFor(event ?? {});
   const line = oneLine(detail ? `${prefix} ${detail}` : prefix);
   return line.length <= maxLength ? line : `${line.slice(0, maxLength - 3)}...`;

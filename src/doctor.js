@@ -37,7 +37,7 @@ export async function runDoctor({
     throw new TypeError('doctor --fix requires a consent function');
   }
 
-  const lines = ['ccc doctor', '', 'Required checks:'];
+  const lines = ['uroboros doctor', '', 'Required checks:'];
   const resolvedScratchRoot = resolve(scratchRoot);
   const state = createDoctorProbeState(resolvedScratchRoot);
   const context = {

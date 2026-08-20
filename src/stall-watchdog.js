@@ -1,4 +1,5 @@
 import { createEvent } from './events.js';
+import { readEnv } from './env-compat.js';
 
 export const DEFAULT_STALL_THRESHOLD_MS = 10 * 60 * 1000;
 export const DEFAULT_STALL_POLICY = 'report';
@@ -7,8 +8,9 @@ export const DEFAULT_STALL_RESTARTS = 1;
 const MAX_TIMER_MS = 2_147_483_647;
 const POLICIES = new Set(['report', 'restart']);
 
-function integerFromEnv(env, name, fallback, minimum, maximum) {
-  const raw = env[name];
+function integerFromEnv(env, suffix, fallback, minimum, maximum) {
+  const name = `URO_${suffix}`;
+  const raw = readEnv(env, suffix);
   if (raw === undefined) return fallback;
   if (!/^\d+$/.test(raw)) {
     throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
@@ -21,15 +23,15 @@ function integerFromEnv(env, name, fallback, minimum, maximum) {
 }
 
 export function resolveStallConfig(env = process.env) {
-  const policy = env.CCC_STALL_POLICY ?? DEFAULT_STALL_POLICY;
+  const policy = readEnv(env, 'STALL_POLICY') ?? DEFAULT_STALL_POLICY;
   if (!POLICIES.has(policy)) {
-    throw new Error('CCC_STALL_POLICY must be either report or restart');
+    throw new Error('URO_STALL_POLICY must be either report or restart');
   }
   return {
-    thresholdMs: integerFromEnv(env, 'CCC_STALL_THRESHOLD_MS',
+    thresholdMs: integerFromEnv(env, 'STALL_THRESHOLD_MS',
       DEFAULT_STALL_THRESHOLD_MS, 1, MAX_TIMER_MS),
     policy,
-    restartLimit: integerFromEnv(env, 'CCC_STALL_RESTARTS',
+    restartLimit: integerFromEnv(env, 'STALL_RESTARTS',
       DEFAULT_STALL_RESTARTS, 0, 3),
   };
 }

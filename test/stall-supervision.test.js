@@ -7,7 +7,7 @@ import { reportEvent } from '../src/events.js';
 import { exitCodeFor } from '../src/exit.js';
 import { run } from '../src/run.js';
 
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -57,7 +57,7 @@ test('report policy records a real stall, never supplies a kill signal, and keep
       assert.ok(facts.stallEvents.some((event) => event.stage === 'executor'));
       assert.ok(events.some((event) => event.stage === 'executor' && event.type === 'stalled'),
         'positive control: report behavior must be proved with a stall that actually fired');
-      assert.match(readFileSync(join(facts.dir, 'ccc-report.md'), 'utf8'), /## Stalls/);
+      assert.match(readFileSync(join(facts.dir, 'uro-report.md'), 'utf8'), /## Stalls/);
     } finally {
       rmSync(tgt, { recursive: true, force: true });
       rmSync(scr, { recursive: true, force: true });
@@ -199,7 +199,7 @@ test('without a reporter even invalid watchdog settings are never resolved', asy
   try {
     const facts = await run({
       task: 'No observer means no watchdog.', target: tgt, gate: [], gateRetries: 0,
-      scratchRoot: scr, runId: 'no-watchdog', env: { CCC_STALL_POLICY: 'invalid' },
+      scratchRoot: scr, runId: 'no-watchdog', env: { URO_STALL_POLICY: 'invalid' },
       adapters: {
         runExecutor: async (opts) => {
           assert.equal(opts.signal, undefined);

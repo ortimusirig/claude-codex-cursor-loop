@@ -17,6 +17,7 @@ import {
 import { runGate as realGate } from './gate.js';
 import {
   commitCampaignResult,
+  defaultBranchName,
   prepareCampaignBase,
   withDetachedWorktree,
 } from './isolation.js';
@@ -503,7 +504,7 @@ async function runCampaignRound(options) {
           const settled = entries[declared.index];
           return {
             unitId: parentId,
-            branch: settled.facts?.branch ?? declared.branch ?? `ccc/${parentId}`,
+            branch: settled.facts?.branch ?? declared.branch ?? defaultBranchName(parentId),
             commit: settled.resultCommit ?? settled.facts?.baseCommit ?? null,
           };
         });
@@ -550,7 +551,7 @@ async function runCampaignRound(options) {
         lifecycle(unit.unitId, 'unit', 'start', {
           index: unit.index,
           baseRef: topology?.baseRef ?? 'HEAD',
-          branch: unit.branch ?? `ccc/${unit.unitId}`,
+          branch: unit.branch ?? defaultBranchName(unit.unitId),
           ...(unit.perspective === undefined ? {} : { perspective: unit.perspective }),
           ...(candidateSet ? { alternative: true } : {}),
         }, identity);

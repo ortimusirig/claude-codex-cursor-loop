@@ -9,7 +9,7 @@ import { HARNESS_ARTIFACTS } from './artifacts.js';
 import { spawnCapture } from './spawn.js';
 import { countTestPaths } from './merge-test-count.js';
 
-export const MERGE_LEDGER_FILENAME = 'ccc-merge-resolutions.json';
+export const MERGE_LEDGER_FILENAME = 'uro-merge-resolutions.json';
 export const TEST_COUNT_FLOOR_BIN = 'ccc-test-count-floor';
 
 const floorScript = fileURLToPath(new URL('./merge-test-count.js', import.meta.url));

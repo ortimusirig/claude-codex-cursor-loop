@@ -101,7 +101,7 @@ test('written run facts reproduce every verdict source from byte-identical retai
     const { jsonPath } = writeReport({ dir, facts });
 
     // This is intentionally reloaded from the artifact. Re-deriving from the
-    // in-memory parse result would not prove that ccc-runfacts.json is sufficient.
+    // in-memory parse result would not prove that uro-runfacts.json is sufficient.
     const persisted = JSON.parse(readFileSync(jsonPath, 'utf8'));
     for (const [index, expected] of cases.entries()) {
       const recorded = persisted.iterations[index].verifier;

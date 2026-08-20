@@ -3,10 +3,11 @@ import { get as httpGet } from 'node:http';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import {
-  CCC_DASHBOARD_MARKER,
+  URO_DASHBOARD_MARKER,
   DASHBOARD_HOST,
   DEFAULT_DASHBOARD_PORT,
 } from './dashboard-config.js';
+import { readEnv } from './env-compat.js';
 
 const LOOP_CLI_PATH = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
 const DEFAULT_PROBE_TIMEOUT_MS = 200;
@@ -23,7 +24,7 @@ function delay(ms) {
 }
 
 /**
- * Probe one loopback port for the marker already present in the CCC dashboard page.
+ * Probe one loopback port for the marker already present in the URO dashboard page.
  * The result is deliberately small so callers can replace this function in tests.
  */
 export function probeDashboard(port, { timeoutMs = DEFAULT_PROBE_TIMEOUT_MS } = {}) {
@@ -52,11 +53,11 @@ export function probeDashboard(port, { timeoutMs = DEFAULT_PROBE_TIMEOUT_MS } = 
         incoming.setEncoding('utf8');
         incoming.on('data', (chunk) => {
           body += chunk;
-          if (body.includes(CCC_DASHBOARD_MARKER)) finish('ccc');
+          if (body.includes(URO_DASHBOARD_MARKER)) finish('uroboros');
           else if (body.length > MAX_PROBE_BYTES) finish('foreign');
         });
         incoming.on('end', () => finish(
-          body.includes(CCC_DASHBOARD_MARKER) ? 'ccc' : 'foreign',
+          body.includes(URO_DASHBOARD_MARKER) ? 'uroboros' : 'foreign',
         ));
         incoming.on('error', () => finish('foreign'));
       });
@@ -126,7 +127,7 @@ function maybeOpen(url, options) {
  */
 export async function launchDashboard(scratchRoot, options = {}) {
   const env = options.env ?? process.env;
-  if (options.disabled === true || env.CCC_NO_DASHBOARD === '1') {
+  if (options.disabled === true || readEnv(env, 'NO_DASHBOARD') === '1') {
     return { status: 'disabled' };
   }
 
@@ -144,7 +145,7 @@ export async function launchDashboard(scratchRoot, options = {}) {
     const probe = options.probe ?? probeDashboard;
     const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     const initial = await probe(port, { timeoutMs: probeTimeoutMs });
-    if (initial?.status === 'ccc') {
+    if (initial?.status === 'uroboros') {
       maybeOpen(url, options);
       return { status: 'reused', url };
     }
@@ -194,7 +195,7 @@ export async function launchDashboard(scratchRoot, options = {}) {
       }
       const remaining = Math.max(1, deadline - Date.now());
       const ready = await probe(port, { timeoutMs: Math.min(probeTimeoutMs, remaining) });
-      if (ready?.status === 'ccc') {
+      if (ready?.status === 'uroboros') {
         maybeOpen(url, options);
         return { status: 'started', url };
       }

@@ -16,13 +16,14 @@ import {
   formatDashboardAnnouncement,
   launchDashboard,
 } from '../src/dashboard-launcher.js';
+import { readEnv } from '../src/env-compat.js';
 
 // Short path, outside OneDrive and outside AppData (both are rejected by
 // assertSafeScratchRoot; AppData is MSIX-redirected under a packaged host).
 const DEFAULT_SCRATCH = process.platform === 'win32'
-  ? 'C:/ccc/w'
-  : join(homedir(), '.ccc', 'w');
-const SCRATCH_ROOT = process.env.CCC_SCRATCH_ROOT ?? DEFAULT_SCRATCH;
+  ? 'C:/uro/w'
+  : join(homedir(), '.uro', 'w');
+const SCRATCH_ROOT = readEnv(process.env, 'SCRATCH_ROOT') ?? DEFAULT_SCRATCH;
 
 function createCliReporter({ eventsPath, quiet }) {
   // isolate/start precedes creation of the isolated directory. Hold only those opening
@@ -153,7 +154,7 @@ async function main() {
     try {
       const published = await publishRunToGitHub({
         runDirectory: opts.runDirectory,
-        ghBin: process.env.CCC_GH_BIN ?? 'gh',
+        ghBin: readEnv(process.env, 'GH_BIN') ?? 'gh',
       });
       process.stdout.write(`${published.url}\n`);
     } catch (error) {

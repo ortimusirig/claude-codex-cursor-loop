@@ -4,6 +4,7 @@ import { encodeRecordedText } from './execution-record.js';
 import { annotateUsageConsistency, EMPTY_USAGE, normalizeCodexUsage } from './usage.js';
 import { resolveStageTimeouts } from './timeouts.js';
 import { StringDecoder } from 'node:string_decoder';
+import { readEnv } from './env-compat.js';
 
 export const DEFAULT_EXECUTOR_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_EXECUTOR_EFFORT = 'xhigh';
@@ -15,13 +16,13 @@ export const DEFAULT_EXECUTOR_EFFORT = 'xhigh';
 // reports gate-failed forever. Reads and model replies still work, which makes the
 // failure easy to misdiagnose: probe with a WRITE, not a greeting.
 //
-// The escape hatch is CCC_CODEX_SANDBOX. Setting it to `danger-full-access` unblocks the
+// The escape hatch is URO_CODEX_SANDBOX. Setting it to `danger-full-access` unblocks the
 // executor, and the honest trade is worth stating plainly: it removes Codex's own
 // confinement, so Codex is no longer restricted to the worktree. What still holds is the
 // harness's isolation — a throwaway git worktree on a non-synced scratch disk, and a diff
 // a human reads before anything merges. Codex's sandbox was a second belt on top of that,
 // not the only one. Prefer fixing the SID resolution and leaving this unset.
-const SANDBOX = process.env.CCC_CODEX_SANDBOX ?? 'workspace-write';
+const SANDBOX = readEnv(process.env, 'CODEX_SANDBOX') ?? 'workspace-write';
 
 export function buildCodexArgs({
   cwd,

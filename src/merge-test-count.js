@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readEnv } from './env-compat.js';
 
 const TEST_DIRECTORIES = new Set(['test', 'tests', '__tests__']);
 
@@ -35,15 +36,15 @@ export function countTestFiles(directory) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const floor = Number(process.argv[2]);
   if (!Number.isSafeInteger(floor) || floor < 0) {
-    process.stderr.write(`invalid CCC test-count floor: ${process.argv[2] ?? '(missing)'}\n`);
+    process.stderr.write(`invalid URO test-count floor: ${process.argv[2] ?? '(missing)'}\n`);
     process.exitCode = 2;
   } else {
-    const observed = process.env.CCC_OBSERVED_TEST_COUNT;
+    const observed = readEnv(process.env, 'OBSERVED_TEST_COUNT');
     const parsedObserved = observed === undefined ? null : Number(observed);
     const actual = Number.isSafeInteger(parsedObserved) && parsedObserved >= 0
       ? parsedObserved
       : countTestFiles(process.cwd());
-    process.stdout.write(`CCC test-count floor: actual=${actual} required=${floor}\n`);
+    process.stdout.write(`URO test-count floor: actual=${actual} required=${floor}\n`);
     process.exitCode = actual >= floor ? 0 : 1;
   }
 }

@@ -114,7 +114,7 @@ test('assertUsablePrompt accepts a usable prompt', () => {
 test('both prompts are usable skill pointers with self-sufficient verdict contracts', () => {
   for (const prompt of [DEFAULT_PROMPT, INTENT_PROMPT]) {
     assert.doesNotThrow(() => assertUsablePrompt(prompt));
-    assert.match(prompt, /^\/ccc-verify\b/, 'the prompt must explicitly select the shipped skill');
+    assert.match(prompt, /^\/uro-verify\b/, 'the prompt must explicitly select the shipped skill');
     assert.match(prompt, /final line exactly NO_BLOCKERS or exactly ISSUES/,
       'the prompt must retain the verdict contract if skill loading fails');
     assert.doesNotMatch(prompt, /["\r\n]/);

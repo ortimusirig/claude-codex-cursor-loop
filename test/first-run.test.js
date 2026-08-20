@@ -28,7 +28,7 @@ const fakeAgent = fileURLToPath(new URL('../fixtures/fake-doctor-agent.mjs', imp
 const fakeGh = fileURLToPath(new URL('../fixtures/fake-doctor-gh.mjs', import.meta.url));
 const fakeCodexNoWrite = fileURLToPath(new URL('../fixtures/fake-codex.mjs', import.meta.url));
 const fakeAgentBlocked = fileURLToPath(new URL('../fixtures/fake-agent-broken.mjs', import.meta.url));
-const SAFE_TEST_ROOT = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_TEST_ROOT = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/tmp'
   : tmpdir());
 
@@ -184,7 +184,7 @@ test('doctor requires both free local sign-in checks, with passing positive cont
     assert.match(signedIn.stdout, /PASS \[required\] Codex signed in: `codex login status` exited 0/);
     assert.match(signedIn.stdout, /PASS \[required\] Cursor signed in: `agent status` exited 0/);
 
-    fixture.env.CCC_FAKE_CODEX_SIGNED_IN = 'no';
+    fixture.env.URO_FAKE_CODEX_SIGNED_IN = 'no';
     const codexSignedOut = await invokeDoctor(fixture);
     assert.notEqual(codexSignedOut.code, 0);
     assert.match(codexSignedOut.stdout, /FAIL \[required\] Codex signed in: `codex login status` exited 1/);
@@ -193,8 +193,8 @@ test('doctor requires both free local sign-in checks, with passing positive cont
     assert.match(codexSignedOut.stdout, /PASS \[required\] Cursor signed in/,
       'positive control: Cursor can still pass while Codex is signed out');
 
-    delete fixture.env.CCC_FAKE_CODEX_SIGNED_IN;
-    fixture.env.CCC_FAKE_AGENT_SIGNED_IN = 'no';
+    delete fixture.env.URO_FAKE_CODEX_SIGNED_IN;
+    fixture.env.URO_FAKE_AGENT_SIGNED_IN = 'no';
     const cursorSignedOut = await invokeDoctor(fixture);
     assert.notEqual(cursorSignedOut.code, 0);
     assert.match(cursorSignedOut.stdout, /PASS \[required\] Codex signed in/,
@@ -210,7 +210,7 @@ test('doctor requires both free local sign-in checks, with passing positive cont
 test('plain doctor invokes only local status commands and never model probes', async () => {
   const fixture = doctorFixture();
   const invocationsPath = join(fixture.root, 'agent-invocations.jsonl');
-  fixture.env.CCC_FAKE_DOCTOR_INVOCATIONS = invocationsPath;
+  fixture.env.URO_FAKE_DOCTOR_INVOCATIONS = invocationsPath;
   try {
     const result = await invokeDoctor(fixture);
     assert.equal(result.code, 0, `${result.stderr}\n${result.stdout}`);
@@ -295,8 +295,8 @@ test('doctor reports GitHub installed, authentication, and remote preconditions 
     assert.match(result.stdout, /FAIL \[optional\] GitHub authentication: `gh auth status` did not succeed/);
     assert.match(result.stdout, /FAIL \[optional\] GitHub remote:/);
 
-    fixture.env.CCC_FAKE_GH_AUTH = 'yes';
-    fixture.env.CCC_FAKE_GITHUB_REMOTE = 'yes';
+    fixture.env.URO_FAKE_GH_AUTH = 'yes';
+    fixture.env.URO_FAKE_GITHUB_REMOTE = 'yes';
     const ready = await invokeDoctor(fixture);
     assert.equal(ready.code, 0, ready.stderr);
     assert.match(ready.stdout, /PASS \[optional\] GitHub CLI installed/);

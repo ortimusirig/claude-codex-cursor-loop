@@ -58,8 +58,8 @@ export async function runGate({
     let commandEnv;
     if (cmd.harness === 'ccc-test-count-floor') {
       commandEnv = { ...process.env };
-      if (observedTestCount) commandEnv.CCC_OBSERVED_TEST_COUNT = String(testCount);
-      else delete commandEnv.CCC_OBSERVED_TEST_COUNT;
+      if (observedTestCount) commandEnv.URO_OBSERVED_TEST_COUNT = String(testCount);
+      else delete commandEnv.URO_OBSERVED_TEST_COUNT;
     }
     const r = await spawnCapture(cmd.bin, cmd.args, {
       cwd,

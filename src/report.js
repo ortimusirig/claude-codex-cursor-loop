@@ -318,16 +318,16 @@ export function buildReportMarkdown(facts, {
 }
 
 export function writeReport({ dir, facts, reporter, runId = facts.runId }) {
-  const jsonPath = join(dir, 'ccc-runfacts.json');
-  const mdPath = join(dir, 'ccc-report.md');
+  const jsonPath = join(dir, 'uro-runfacts.json');
+  const mdPath = join(dir, 'uro-report.md');
   reportEvent(reporter, runId, 'report', 'start', {
-    files: ['ccc-runfacts.json', 'ccc-report.md'],
+    files: ['uro-runfacts.json', 'uro-report.md'],
   });
   writeFileSync(jsonPath, JSON.stringify(facts, null, 2));
   const markdown = buildReportMarkdown(facts);
   writeFileSync(mdPath, markdown);
   reportEvent(reporter, runId, 'report', 'finish', {
-    file: 'ccc-runfacts.json', files: ['ccc-runfacts.json', 'ccc-report.md'],
+    file: 'uro-runfacts.json', files: ['uro-runfacts.json', 'uro-report.md'],
   });
   return { jsonPath, mdPath };
 }

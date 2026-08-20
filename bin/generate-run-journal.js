@@ -9,7 +9,7 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 function usage() {
   return [
     'Usage:',
-    '  node bin/generate-run-journal.js <run-directory-or-ccc-runfacts.json>',
+    '  node bin/generate-run-journal.js <run-directory-or-uro-runfacts.json>',
     '  node bin/generate-run-journal.js --all <scratch-root>',
   ].join('\n');
 }

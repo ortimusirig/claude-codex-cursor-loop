@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { buildReportMarkdown } from './report.js';
 import { reportEvent } from './events.js';
 
-export const RUN_FACTS_FILENAME = 'ccc-runfacts.json';
+export const RUN_FACTS_FILENAME = 'uro-runfacts.json';
+export const LEGACY_RUN_FACTS_FILENAME = 'ccc-runfacts.json';
 export const EVENTS_FILENAME = 'events.jsonl';
 
 const DEFAULT_PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -25,16 +26,20 @@ function resolveRunFactsPath(inputPath) {
   const stat = statSync(input);
   if (!stat.isDirectory()) return input;
 
-  const candidates = [
-    join(input, RUN_FACTS_FILENAME),
-    join(input, 'w', RUN_FACTS_FILENAME),
-  ];
-  const found = candidates.filter(existsSync);
-  if (found.length === 1) return found[0];
-  if (found.length > 1) {
-    throw new Error(`run directory contains multiple ${RUN_FACTS_FILENAME} files: ${input}`);
+  const locations = [input, join(input, 'w')];
+  const candidates = [RUN_FACTS_FILENAME, LEGACY_RUN_FACTS_FILENAME].map((filename) => ({
+    filename,
+    found: locations.map((location) => join(location, filename)).filter(existsSync),
+  }));
+  const ambiguous = candidates.find(({ found }) => found.length > 1);
+  if (ambiguous) {
+    throw new Error(`run directory contains multiple ${ambiguous.filename} files: ${input}`);
   }
-  throw new Error(`run directory does not contain ${RUN_FACTS_FILENAME}: ${input}`);
+  const preferred = candidates.find(({ found }) => found.length === 1);
+  if (preferred) return preferred.found[0];
+  throw new Error(
+    `run directory does not contain ${RUN_FACTS_FILENAME} or ${LEGACY_RUN_FACTS_FILENAME}: ${input}`,
+  );
 }
 
 function parseEvents(eventsPath) {
@@ -233,6 +238,8 @@ export function findRunFacts(scratchRoot) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) visit(path);
       else if (entry.isFile() && entry.name === RUN_FACTS_FILENAME) found.push(path);
+      else if (entry.isFile() && entry.name === LEGACY_RUN_FACTS_FILENAME
+        && !existsSync(join(dir, RUN_FACTS_FILENAME))) found.push(path);
     }
   };
   visit(root);

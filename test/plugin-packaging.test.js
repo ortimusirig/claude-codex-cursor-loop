@@ -23,7 +23,8 @@ const marketplaceManifestPath = join(metadataDirectory, 'marketplace.json');
 const packagePath = join(root, 'package.json');
 const installerPath = join(root, 'install.mjs');
 const readmePath = join(root, 'README.md');
-const skillPath = join(root, 'skills', 'c-cube-loop', 'SKILL.md');
+const usagePath = join(root, 'docs', 'usage.md');
+const skillPath = join(root, 'skills', 'uroboros', 'SKILL.md');
 
 function parseFrontmatter(path) {
   const document = readFileSync(path, 'utf8');
@@ -116,7 +117,7 @@ test('every command has valid front matter, the CLI description, and controller 
 
   for (const command of ['run', 'batch']) {
     const document = readFileSync(join(commandDirectory, `${command}.md`), 'utf8');
-    assert.match(document, /skills\/c-cube-loop\/SKILL[.]md/);
+    assert.match(document, /skills\/uroboros\/SKILL[.]md/);
     assert.match(document, /planner authors[\s\S]*Codex implements[\s\S]*planner\s+never/i);
     assert.match(document, /usable `--task`/);
     assert.match(document, /author[\s\S]*or ask the user/);
@@ -132,7 +133,7 @@ test('plugin and marketplace manifests have the required identity and root layou
   const marketplace = JSON.parse(readFileSync(marketplaceManifestPath, 'utf8'));
   const pkg = JSON.parse(readFileSync(packagePath, 'utf8'));
 
-  assert.equal(plugin.name, 'c-cube-loop');
+  assert.equal(plugin.name, 'uroboros');
   assert.equal(plugin.name, pkg.name);
   assert.equal(plugin.version, pkg.version);
   assert.ok(plugin.description);
@@ -143,7 +144,7 @@ test('plugin and marketplace manifests have the required identity and root layou
   assert.equal(marketplace.plugins[0].source, './');
 
   assert.ok(existsSync(join(root, 'commands')));
-  assert.ok(existsSync(join(root, 'skills', 'c-cube-loop', 'SKILL.md')));
+  assert.ok(existsSync(join(root, 'skills', 'uroboros', 'SKILL.md')));
   assert.equal(existsSync(join(metadataDirectory, 'commands')), false);
   assert.equal(existsSync(join(metadataDirectory, 'skills')), false);
   assert.equal(existsSync(join(root, 'SKILL.md')), false, 'the root skill must have been moved');
@@ -152,7 +153,7 @@ test('plugin and marketplace manifests have the required identity and root layou
     '.claude-plugin/plugin.json',
     '.claude-plugin/marketplace.json',
     'commands/run.md',
-    'skills/c-cube-loop/SKILL.md',
+    'skills/uroboros/SKILL.md',
   ];
   assert.deepEqual(placementErrors(correctShape), [],
     'positive valid-layout control must be accepted');
@@ -191,7 +192,7 @@ test('installer dry-run leaves all Claude Code managed state byte-identical', ()
     assert.ok(output(result).includes(normalize(root).replace(/[\\/]$/, '')),
       'installer instructions must contain this checkout absolute path');
     assert.match(output(result), /\/plugin marketplace add/);
-    assert.match(output(result), /\/plugin install c-cube-loop@c-cube-loop/);
+    assert.match(output(result), /\/plugin install uroboros@uroboros/);
     assert.match(output(result), /PLUGIN_STATUS=PREPARED mode=plugin/);
     assert.doesNotMatch(output(result), /PLUGIN_STATUS=INSTALLED/);
 
@@ -204,15 +205,16 @@ test('installer dry-run leaves all Claude Code managed state byte-identical', ()
   }
 });
 
-test('README and the governing skill document plugin installation and every command surface', () => {
+test('the user documentation and governing skill cover installation and every command surface', () => {
   const readme = readFileSync(readmePath, 'utf8');
+  const userDocumentation = `${readme}\n${readFileSync(usagePath, 'utf8')}`;
   const skill = readFileSync(skillPath, 'utf8');
-  for (const document of [readme, skill]) {
+  for (const document of [userDocumentation, skill]) {
     assert.match(document, /\/plugin marketplace add/);
-    assert.match(document, /\/plugin install c-cube-loop@c-cube-loop/);
+    assert.match(document, /\/plugin install uroboros@uroboros/);
     for (const command of CLI_COMMANDS) {
-      assert.ok(document.includes(`/c-cube-loop:${command}`),
-        `documentation must name /c-cube-loop:${command}`);
+      assert.ok(document.includes(`/uroboros:${command}`),
+        `documentation must name /uroboros:${command}`);
       assert.ok(document.includes(`node bin/loop.js ${command}`),
         `documentation must retain node bin/loop.js ${command}`);
     }

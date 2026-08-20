@@ -343,7 +343,7 @@ test('dashboard serves only populated Triage and Detail views, with removed rout
     assert.equal(dashboard.host, '127.0.0.1');
     assert.match(dashboard.url, /^http:\/\/127[.]0[.]0[.]1:\d+\/$/);
     const html = await page(dashboard);
-    assert.match(html, /CCC live run dashboard/);
+    assert.match(html, /URO live run dashboard/);
     assert.match(html, /Current stage<\/span><strong>executor<\/strong>/,
       'the served document itself must carry the current stage');
     assert.match(html, new RegExp(`data-run-id="${runId}"`),
@@ -508,9 +508,9 @@ test('dashboard shows both labelled reviews, provenance, consistency, and ration
     event(runId, 'verify', 'finish', {
       pass: 'intent', verdict: 'ISSUES', source: 'assistant', tokens: { outputTokens: 7 },
     }),
-    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
+    event(runId, 'report', 'finish', { file: 'uro-runfacts.json' }),
   ]);
-  writeFileSync(join(run.work, 'ccc-runfacts.json'), JSON.stringify({
+  writeFileSync(join(run.work, 'uro-runfacts.json'), JSON.stringify({
     runId,
     verdict: 'ISSUES',
     verdictSource: 'none',
@@ -603,13 +603,13 @@ test('verifier reports are collapsed and retain distinct nested process traces',
     event(runId, 'verify', 'finish', {
       pass: 'intent', verdict: 'ISSUES', source: 'none',
     }),
-    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
+    event(runId, 'report', 'finish', { file: 'uro-runfacts.json' }),
   ]);
   const correctnessPlan = '## Correctness\nSpecific <check> passed & stayed covered.\n\n## Verdict\nNO_BLOCKERS';
   const correctnessFindings = 'I will inspect CHANGES.diff before reviewing correctness.';
   const intentPlan = '## Intent\nA specific requirement was not met.\n\n## Verdict\nISSUES';
   const intentFindings = 'I will read TASK.md and narrate each intent-review step.';
-  writeFileSync(join(run.work, 'ccc-runfacts.json'), JSON.stringify({
+  writeFileSync(join(run.work, 'uro-runfacts.json'), JSON.stringify({
     runId,
     verdict: 'NO_BLOCKERS',
     verdictSource: 'assistant',
@@ -676,7 +676,7 @@ test('the run card renders completion, ordered stages, gate exits, seat tokens, 
       pass: 'correctness', verdict: 'NO_BLOCKERS', source: 'result',
       tokens: { cachedInputTokens: 3, reasoningOutputTokens: 2 },
     }),
-    event(runId, 'report', 'finish', { file: 'ccc-runfacts.json' }),
+    event(runId, 'report', 'finish', { file: 'uro-runfacts.json' }),
   ]);
   let dashboard;
   try {
@@ -705,7 +705,7 @@ test('the run card renders completion, ordered stages, gate exits, seat tokens, 
   }
 });
 
-test('dashboard serving and SSE observation leave every run byte unchanged', async () => {
+test('dashboard serving and SSE observation leave legacy run facts byte unchanged', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccc-dashboard-readonly-'));
   const runId = 'run-readonly';
   const run = makeRun(root, runId, [

@@ -14,12 +14,13 @@ import { buildCodexArgs } from './executor.js';
 import { assertSafeScratchRoot } from './isolation.js';
 import { commandExists, spawnCapture } from './spawn.js';
 import { buildCursorArgs } from './verifier.js';
+import { readEnv } from './env-compat.js';
 
 const MINIMUM_NODE_MAJOR = 24;
 const CHEAP_PROBE_TIMEOUT_MS = 30_000;
 const PROBE_TIMEOUT_MS = 180_000;
 const WRITE_FILENAME = 'ccc-doctor-write.txt';
-const WRITE_CONTENT = 'CCC_DOCTOR_WRITE_OK\n';
+const WRITE_CONTENT = 'URO_DOCTOR_WRITE_OK\n';
 const DEFAULT_ENVIRONMENT = process.env;
 
 export const CURSOR_AGENT_INSTALL_COMMANDS = Object.freeze({
@@ -145,7 +146,7 @@ async function probeCodex(bin, gitBin, workspace) {
 async function probeAgent(bin, workspace) {
   const directory = join(workspace, 'cursor-read');
   mkdirSync(directory);
-  const token = `CCC_DOCTOR_READ_${randomUUID()}`;
+  const token = `URO_DOCTOR_READ_${randomUUID()}`;
   const inputPath = join(directory, 'ccc-doctor-read.txt');
   writeFileSync(inputPath, `${token}\n`);
   const prompt = 'Read ccc-doctor-read.txt and return its exact contents. This is a read-only diagnostic; do not create, edit, or delete any file.';
@@ -345,7 +346,7 @@ export const DOCTOR_CHECKS = Object.freeze([
     kind: 'required',
     name: 'Scratch root location',
     remediation: remediation(
-      'set `CCC_SCRATCH_ROOT` to a short local path outside AppData and OneDrive (for example `C:\\ccc\\w`) and rerun doctor.',
+      'set `URO_SCRATCH_ROOT` to a short local path outside AppData and OneDrive (for example `C:\\uro\\w`) and rerun doctor.',
       null,
       false,
     ),
@@ -366,7 +367,7 @@ export const DOCTOR_CHECKS = Object.freeze([
     kind: 'required',
     name: 'Scratch root writable',
     remediation: remediation(
-      'grant write access to this directory or set `CCC_SCRATCH_ROOT` to a writable local path, then rerun doctor.',
+      'grant write access to this directory or set `URO_SCRATCH_ROOT` to a writable local path, then rerun doctor.',
       Object.freeze({
         type: 'mkdir',
         path: Object.freeze({ from: 'input', name: 'scratchRoot' }),
@@ -375,7 +376,7 @@ export const DOCTOR_CHECKS = Object.freeze([
       true,
       {
         unsafe: Object.freeze({
-          prose: 'set `CCC_SCRATCH_ROOT` to a writable local path outside AppData and OneDrive, then rerun doctor.',
+          prose: 'set `URO_SCRATCH_ROOT` to a writable local path outside AppData and OneDrive, then rerun doctor.',
           command: null,
           autoFixable: false,
         }),
@@ -615,16 +616,16 @@ export const DOCTOR_CHECKS = Object.freeze([
     kind: 'optional',
     name: 'Publish guard blocklist',
     remediation: remediation(
-      'set `CCC_PUBLISH_BLOCKLIST` to a readable, non-empty newline-delimited blocklist; publish refuses until at least one usable term is present.',
+      'set `URO_PUBLISH_BLOCKLIST` to a readable, non-empty newline-delimited blocklist; publish refuses until at least one usable term is present.',
       null,
       false,
     ),
     probe: async (context) => {
-      const blocklistPath = doctorEnvironment(context)?.CCC_PUBLISH_BLOCKLIST;
+      const blocklistPath = readEnv(doctorEnvironment(context), 'PUBLISH_BLOCKLIST');
       if (typeof blocklistPath !== 'string' || blocklistPath === '') {
         return {
           status: 'FAIL',
-          detail: '`CCC_PUBLISH_BLOCKLIST` is not set; publish refuses without a readable, non-empty blocklist',
+          detail: '`URO_PUBLISH_BLOCKLIST` is not set; publish refuses without a readable, non-empty blocklist',
           remediationKey: 'default',
         };
       }
@@ -635,7 +636,7 @@ export const DOCTOR_CHECKS = Object.freeze([
       } catch (error) {
         return {
           status: 'FAIL',
-          detail: `\`CCC_PUBLISH_BLOCKLIST\` could not be read: ${error.message}; publish refuses without it`,
+          detail: `\`URO_PUBLISH_BLOCKLIST\` could not be read: ${error.message}; publish refuses without it`,
           remediationKey: 'default',
         };
       }
@@ -648,7 +649,7 @@ export const DOCTOR_CHECKS = Object.freeze([
           }
         : {
             status: 'FAIL',
-            detail: '`CCC_PUBLISH_BLOCKLIST` contains no usable terms; publish refuses without a non-empty blocklist',
+            detail: '`URO_PUBLISH_BLOCKLIST` contains no usable terms; publish refuses without a non-empty blocklist',
             remediationKey: 'default',
           };
     },

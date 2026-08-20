@@ -19,7 +19,7 @@ const fakeGit = fileURLToPath(new URL('../fixtures/fake-doctor-git.mjs', import.
 const fakeCodex = fileURLToPath(new URL('../fixtures/fake-doctor-codex.mjs', import.meta.url));
 const fakeAgent = fileURLToPath(new URL('../fixtures/fake-doctor-agent.mjs', import.meta.url));
 const fakeGh = fileURLToPath(new URL('../fixtures/fake-doctor-gh.mjs', import.meta.url));
-const SAFE_TEST_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_TEST_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/tmp'
   : tmpdir());
 const SAFE_TEST_ROOT = join(SAFE_TEST_BASE, '.ccc-doctor-registry-tests');
@@ -61,7 +61,7 @@ function createPassingFixture() {
       gitleaks: writeFakeBin(binRoot, 'golden-gitleaks', fakeGh),
       trufflehog: writeFakeBin(binRoot, 'golden-trufflehog', fakeGh),
       logdy: writeFakeBin(binRoot, 'golden-logdy', fakeGh),
-      environment: { CCC_PUBLISH_BLOCKLIST: blocklist },
+      environment: { URO_PUBLISH_BLOCKLIST: blocklist },
     },
   };
 }
@@ -192,7 +192,7 @@ test('publish guard gitleaks passes when present and fails with actionable remed
   assert.match(check.remediation.prose, /https:\/\/github[.]com\/gitleaks\/gitleaks#installing/);
 });
 
-test('publish guard blocklist fails when CCC_PUBLISH_BLOCKLIST is unset', async () => {
+test('publish guard blocklist fails when URO_PUBLISH_BLOCKLIST is unset', async () => {
   const outcome = await doctorCheck('publish-guard-blocklist').probe({ bins: {}, env: {} });
   assert.equal(outcome.status, 'FAIL');
   assert.match(outcome.detail, /is not set/);
@@ -204,7 +204,7 @@ test('publish guard blocklist fails when its injected path does not exist', asyn
   try {
     const outcome = await doctorCheck('publish-guard-blocklist').probe({
       bins: {},
-      env: { CCC_PUBLISH_BLOCKLIST: join(root, 'missing.txt') },
+      env: { URO_PUBLISH_BLOCKLIST: join(root, 'missing.txt') },
     });
     assert.equal(outcome.status, 'FAIL');
     assert.match(outcome.detail, /could not be read/);
@@ -221,7 +221,7 @@ test('publish guard blocklist fails when it contains only blank lines and commen
   try {
     const outcome = await doctorCheck('publish-guard-blocklist').probe({
       bins: {},
-      env: { CCC_PUBLISH_BLOCKLIST: path },
+      env: { URO_PUBLISH_BLOCKLIST: path },
     });
     assert.equal(outcome.status, 'FAIL');
     assert.match(outcome.detail, /contains no usable terms/);
@@ -238,7 +238,7 @@ test('publish guard blocklist passes and reports only the count for two usable t
   try {
     const outcome = await doctorCheck('publish-guard-blocklist').probe({
       bins: {},
-      env: { CCC_PUBLISH_BLOCKLIST: path },
+      env: { URO_PUBLISH_BLOCKLIST: path },
     });
     assert.equal(outcome.status, 'PASS');
     assert.match(outcome.detail, /2 usable blocklist terms found/);
@@ -252,7 +252,7 @@ test('rendered doctor output reports a blocklist count without leaking its conte
   const fixture = createPassingFixture();
   const distinctiveTerm = 'never-render-this-confidential-identifier-9137';
   writeFileSync(
-    fixture.bins.environment.CCC_PUBLISH_BLOCKLIST,
+    fixture.bins.environment.URO_PUBLISH_BLOCKLIST,
     `${distinctiveTerm}\nanother-confidential-identifier\n`,
   );
   try {
@@ -319,10 +319,10 @@ test('optional publish guard failures do not affect core health, while required 
 
 test('doctor all-pass output is byte-identical to its committed golden', async () => {
   const fixture = createPassingFixture();
-  const previousRemote = process.env.CCC_FAKE_GITHUB_REMOTE;
-  const previousAuth = process.env.CCC_FAKE_GH_AUTH;
-  process.env.CCC_FAKE_GITHUB_REMOTE = 'yes';
-  process.env.CCC_FAKE_GH_AUTH = 'yes';
+  const previousRemote = process.env.URO_FAKE_GITHUB_REMOTE;
+  const previousAuth = process.env.URO_FAKE_GH_AUTH;
+  process.env.URO_FAKE_GITHUB_REMOTE = 'yes';
+  process.env.URO_FAKE_GH_AUTH = 'yes';
   try {
     const result = await runDoctor({
       deep: true,
@@ -351,10 +351,10 @@ test('doctor all-pass output is byte-identical to its committed golden', async (
       'positive control: the golden comparison must reject a one-character difference',
     );
   } finally {
-    if (previousRemote === undefined) delete process.env.CCC_FAKE_GITHUB_REMOTE;
-    else process.env.CCC_FAKE_GITHUB_REMOTE = previousRemote;
-    if (previousAuth === undefined) delete process.env.CCC_FAKE_GH_AUTH;
-    else process.env.CCC_FAKE_GH_AUTH = previousAuth;
+    if (previousRemote === undefined) delete process.env.URO_FAKE_GITHUB_REMOTE;
+    else process.env.URO_FAKE_GITHUB_REMOTE = previousRemote;
+    if (previousAuth === undefined) delete process.env.URO_FAKE_GH_AUTH;
+    else process.env.URO_FAKE_GH_AUTH = previousAuth;
     removeFixture(fixture.root);
   }
 });

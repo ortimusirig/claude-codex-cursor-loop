@@ -23,7 +23,7 @@ import {
   normalizeCursorUsage,
 } from '../src/usage.js';
 
-const SAFE_SCRATCH_BASE = process.env.CCC_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
+const SAFE_SCRATCH_BASE = process.env.URO_TEST_SCRATCH_ROOT ?? (process.platform === 'win32'
   ? 'C:/ccc-test'
   : join(homedir(), '.ccc-test'));
 
@@ -932,7 +932,7 @@ test('campaign unit topology reaches isolation and is recorded in run facts', as
     assert.equal(facts.baseCommit, selectedCommit);
     assert.equal(facts.branch, 'planner/facts-unit');
     assert.equal(readFileSync(join(facts.dir, 'version.txt'), 'utf8').trim(), 'selected base');
-    const persisted = JSON.parse(readFileSync(join(facts.dir, 'ccc-runfacts.json'), 'utf8'));
+    const persisted = JSON.parse(readFileSync(join(facts.dir, 'uro-runfacts.json'), 'utf8'));
     assert.deepEqual(
       { baseRef: persisted.baseRef, baseCommit: persisted.baseCommit, branch: persisted.branch },
       { baseRef: 'planner-base', baseCommit: selectedCommit, branch: 'planner/facts-unit' },

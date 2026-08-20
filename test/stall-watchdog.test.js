@@ -97,9 +97,9 @@ test('stall configuration defaults to ten-minute report-only with one bounded re
   assert.equal(DEFAULT_STALL_POLICY, 'report');
   assert.equal(DEFAULT_STALL_RESTARTS, 1);
   assert.deepEqual(resolveStallConfig({
-    CCC_STALL_THRESHOLD_MS: '1234', CCC_STALL_POLICY: 'restart', CCC_STALL_RESTARTS: '2',
+    URO_STALL_THRESHOLD_MS: '1234', URO_STALL_POLICY: 'restart', URO_STALL_RESTARTS: '2',
   }), { thresholdMs: 1234, policy: 'restart', restartLimit: 2 });
-  assert.throws(() => resolveStallConfig({ CCC_STALL_POLICY: 'kill' }), /CCC_STALL_POLICY/);
-  assert.throws(() => resolveStallConfig({ CCC_STALL_THRESHOLD_MS: '0' }),
-    /CCC_STALL_THRESHOLD_MS/);
+  assert.throws(() => resolveStallConfig({ URO_STALL_POLICY: 'kill' }), /URO_STALL_POLICY/);
+  assert.throws(() => resolveStallConfig({ URO_STALL_THRESHOLD_MS: '0' }),
+    /URO_STALL_THRESHOLD_MS/);
 });

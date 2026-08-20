@@ -18,17 +18,17 @@ test('stage timeout defaults are 30m executor, 10m verifier, and 60m gate', () =
   assert.equal(DEFAULT_GATE_TIMEOUT_MS, 60 * 60 * 1000);
 });
 
-test('each stage timeout is overridable by its CCC_ environment variable', () => {
+test('each stage timeout is overridable by its URO_ environment variable', () => {
   assert.deepEqual(resolveStageTimeouts({
-    CCC_EXECUTOR_TIMEOUT_MS: '101',
-    CCC_VERIFIER_TIMEOUT_MS: '202',
-    CCC_GATE_TIMEOUT_MS: '303',
+    URO_EXECUTOR_TIMEOUT_MS: '101',
+    URO_VERIFIER_TIMEOUT_MS: '202',
+    URO_GATE_TIMEOUT_MS: '303',
   }), { executor: 101, verifier: 202, gate: 303 });
 });
 
 test('invalid configured timeouts fail loudly', () => {
-  assert.throws(() => resolveStageTimeouts({ CCC_EXECUTOR_TIMEOUT_MS: '0' }),
-    /CCC_EXECUTOR_TIMEOUT_MS/);
-  assert.throws(() => resolveStageTimeouts({ CCC_GATE_TIMEOUT_MS: 'tomorrow' }),
-    /CCC_GATE_TIMEOUT_MS/);
+  assert.throws(() => resolveStageTimeouts({ URO_EXECUTOR_TIMEOUT_MS: '0' }),
+    /URO_EXECUTOR_TIMEOUT_MS/);
+  assert.throws(() => resolveStageTimeouts({ URO_GATE_TIMEOUT_MS: 'tomorrow' }),
+    /URO_GATE_TIMEOUT_MS/);
 });
