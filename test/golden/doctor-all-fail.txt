@@ -28,6 +28,12 @@ FAIL [optional] GitHub authentication: not checkable until GitHub CLI is install
   Next: run `gh auth login`, then confirm with `gh auth status`.
 FAIL [optional] GitHub remote: {{REPOSITORY}} has no github.com remote
   Next: from the existing local repository run `gh repo create OWNER/REPOSITORY --source=. --remote=origin --private --push` (or replace `--private` with `--public`).
+FAIL [optional] Publish guard gitleaks: ccc-doctor-golden-missing-gitleaks-7e57 was not found on PATH; publish refuses without it
+  Next: publish refuses without `gitleaks`; install it from https://github.com/gitleaks/gitleaks#installing, confirm it is on PATH, and rerun doctor.
+FAIL [optional] Publish guard blocklist: `CCC_PUBLISH_BLOCKLIST` is not set; publish refuses without a readable, non-empty blocklist
+  Next: set `CCC_PUBLISH_BLOCKLIST` to a readable, non-empty newline-delimited blocklist; publish refuses until at least one usable term is present.
+FAIL [optional] Publish guard trufflehog: ccc-doctor-golden-missing-trufflehog-7e57 was not found on PATH; advisory only -- publish warns and proceeds without it
+  Next: optionally install `trufflehog` from https://github.com/trufflesecurity/trufflehog; its scan is advisory and does not block publish.
 FAIL [optional] Logdy event viewer: ccc-doctor-golden-missing-logdy-7e57 was not found on PATH; event files and the built-in dashboard still work
   Next: on macOS run `brew install logdy`; from a POSIX shell run `curl https://logdy.dev/install-silent.sh | sh`; on Windows install the release binary from https://github.com/logdyhq/logdy-core/releases and confirm with `logdy --version`.
 INFO [optional] Offline run journal: available through `node bin/generate-run-journal.js --help`; no external integration is required.

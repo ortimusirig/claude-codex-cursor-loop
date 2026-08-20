@@ -47,6 +47,8 @@ function createPassingFixture() {
   const repository = join(root, 'repository');
   mkdirSync(binRoot);
   mkdirSync(repository);
+  const blocklist = join(root, 'publish-blocklist.txt');
+  writeFileSync(blocklist, 'confidential-customer\n# Comments are ignored.\ninternal-project\n');
   return {
     root,
     scratchRoot: join(root, 'scratch'),
@@ -56,7 +58,10 @@ function createPassingFixture() {
       codex: writeFakeBin(binRoot, 'golden-codex', fakeCodex),
       agent: writeFakeBin(binRoot, 'golden-agent', fakeAgent),
       gh: writeFakeBin(binRoot, 'golden-gh', fakeGh),
+      gitleaks: writeFakeBin(binRoot, 'golden-gitleaks', fakeGh),
+      trufflehog: writeFakeBin(binRoot, 'golden-trufflehog', fakeGh),
       logdy: writeFakeBin(binRoot, 'golden-logdy', fakeGh),
+      environment: { CCC_PUBLISH_BLOCKLIST: blocklist },
     },
   };
 }
@@ -75,7 +80,10 @@ function createFailingFixture() {
       codex: 'ccc-doctor-golden-missing-codex-7e57',
       agent: 'ccc-doctor-golden-missing-agent-7e57',
       gh: 'ccc-doctor-golden-missing-gh-7e57',
+      gitleaks: 'ccc-doctor-golden-missing-gitleaks-7e57',
+      trufflehog: 'ccc-doctor-golden-missing-trufflehog-7e57',
       logdy: 'ccc-doctor-golden-missing-logdy-7e57',
+      environment: {},
     },
   };
 }
@@ -97,6 +105,12 @@ function assertGoldenEquality(actual, expected) {
 function removeFixture(root) {
   rmSync(root, { recursive: true, force: true });
   try { rmdirSync(SAFE_TEST_ROOT); } catch { /* Another fixture may still own the parent. */ }
+}
+
+function doctorCheck(id) {
+  const check = DOCTOR_CHECKS.find((candidate) => candidate.id === id);
+  assert.ok(check, `doctor registry must contain ${id}`);
+  return check;
 }
 
 test('doctor registry has every prerequisite id and exactly three auto-fixable checks', () => {
@@ -147,6 +161,160 @@ test('doctor registry has every prerequisite id and exactly three auto-fixable c
       .every((check) => check.remediation.autoFixable === false),
     'every optional check must explicitly remain non-auto-fixable',
   );
+  assert.deepEqual(
+    DOCTOR_CHECKS.filter((check) => check.id.startsWith('publish-guard-'))
+      .map(({ id, phase, kind, remediation }) => ({
+        id,
+        phase,
+        kind,
+        autoFixable: remediation.autoFixable,
+      })),
+    [
+      { id: 'publish-guard-gitleaks', phase: 'optional', kind: 'optional', autoFixable: false },
+      { id: 'publish-guard-blocklist', phase: 'optional', kind: 'optional', autoFixable: false },
+      { id: 'publish-guard-trufflehog', phase: 'optional', kind: 'optional', autoFixable: false },
+    ],
+  );
+});
+
+test('publish guard gitleaks passes when present and fails with actionable remediation when absent', async () => {
+  const check = doctorCheck('publish-guard-gitleaks');
+  const present = await check.probe({ bins: { gitleaks: process.execPath } });
+  const absent = await check.probe({
+    bins: { gitleaks: 'ccc-doctor-definitely-missing-gitleaks-58d9' },
+  });
+
+  assert.equal(present.status, 'PASS');
+  assert.match(present.detail, /blocking publish prerequisite is satisfied/);
+  assert.equal(absent.status, 'FAIL');
+  assert.match(absent.detail, /publish refuses without it/);
+  assert.match(check.remediation.prose, /publish refuses without `gitleaks`/);
+  assert.match(check.remediation.prose, /https:\/\/github[.]com\/gitleaks\/gitleaks#installing/);
+});
+
+test('publish guard blocklist fails when CCC_PUBLISH_BLOCKLIST is unset', async () => {
+  const outcome = await doctorCheck('publish-guard-blocklist').probe({ bins: {}, env: {} });
+  assert.equal(outcome.status, 'FAIL');
+  assert.match(outcome.detail, /is not set/);
+  assert.match(outcome.detail, /publish refuses/);
+});
+
+test('publish guard blocklist fails when its injected path does not exist', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-doctor-missing-blocklist-'));
+  try {
+    const outcome = await doctorCheck('publish-guard-blocklist').probe({
+      bins: {},
+      env: { CCC_PUBLISH_BLOCKLIST: join(root, 'missing.txt') },
+    });
+    assert.equal(outcome.status, 'FAIL');
+    assert.match(outcome.detail, /could not be read/);
+    assert.match(outcome.detail, /publish refuses/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('publish guard blocklist fails when it contains only blank lines and comments', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-doctor-empty-blocklist-'));
+  const path = join(root, 'blocklist.txt');
+  writeFileSync(path, '\n  \n# first comment\n   # indented comment\n');
+  try {
+    const outcome = await doctorCheck('publish-guard-blocklist').probe({
+      bins: {},
+      env: { CCC_PUBLISH_BLOCKLIST: path },
+    });
+    assert.equal(outcome.status, 'FAIL');
+    assert.match(outcome.detail, /contains no usable terms/);
+    assert.match(outcome.detail, /publish refuses/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('publish guard blocklist passes and reports only the count for two usable terms', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccc-doctor-valid-blocklist-'));
+  const path = join(root, 'blocklist.txt');
+  writeFileSync(path, '# ignored\nfirst-confidential-value\n\n second-confidential-value \n');
+  try {
+    const outcome = await doctorCheck('publish-guard-blocklist').probe({
+      bins: {},
+      env: { CCC_PUBLISH_BLOCKLIST: path },
+    });
+    assert.equal(outcome.status, 'PASS');
+    assert.match(outcome.detail, /2 usable blocklist terms found/);
+    assert.doesNotMatch(outcome.detail, /first-confidential-value|second-confidential-value/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rendered doctor output reports a blocklist count without leaking its contents', async () => {
+  const fixture = createPassingFixture();
+  const distinctiveTerm = 'never-render-this-confidential-identifier-9137';
+  writeFileSync(
+    fixture.bins.environment.CCC_PUBLISH_BLOCKLIST,
+    `${distinctiveTerm}\nanother-confidential-identifier\n`,
+  );
+  try {
+    const result = await runDoctor({
+      scratchRoot: fixture.scratchRoot,
+      repository: fixture.repository,
+      nodeVersion: '24.9.0',
+      bins: fixture.bins,
+    });
+    assert.match(result.output, /2 usable blocklist terms found/);
+    assert.doesNotMatch(result.output, new RegExp(distinctiveTerm));
+  } finally {
+    removeFixture(fixture.root);
+  }
+});
+
+test('publish guard trufflehog is advisory when absent and passes when present', async () => {
+  const check = doctorCheck('publish-guard-trufflehog');
+  const absent = await check.probe({
+    bins: { trufflehog: 'ccc-doctor-definitely-missing-trufflehog-58d9' },
+  });
+  const present = await check.probe({ bins: { trufflehog: process.execPath } });
+
+  assert.equal(absent.status, 'FAIL');
+  assert.match(absent.detail, /advisory only/);
+  assert.match(absent.detail, /publish warns and proceeds/);
+  assert.equal(present.status, 'PASS');
+  assert.match(present.detail, /advisory publish scanning is available/);
+});
+
+test('optional publish guard failures do not affect core health, while required failures do', async () => {
+  const fixture = createPassingFixture();
+  const bins = {
+    ...fixture.bins,
+    gitleaks: 'ccc-doctor-definitely-missing-gitleaks-core-health-58d9',
+    trufflehog: 'ccc-doctor-definitely-missing-trufflehog-core-health-58d9',
+    environment: {},
+  };
+  try {
+    const healthy = await runDoctor({
+      scratchRoot: fixture.scratchRoot,
+      repository: fixture.repository,
+      nodeVersion: '24.9.0',
+      bins,
+    });
+    assert.equal(healthy.ok, true);
+    assert.match(healthy.output, /Loop core health: HEALTHY/);
+    assert.match(healthy.output, /FAIL \[optional\] Publish guard gitleaks/);
+    assert.match(healthy.output, /FAIL \[optional\] Publish guard blocklist/);
+    assert.match(healthy.output, /FAIL \[optional\] Publish guard trufflehog/);
+
+    const unhealthy = await runDoctor({
+      scratchRoot: fixture.scratchRoot,
+      repository: fixture.repository,
+      nodeVersion: '23.9.0',
+      bins,
+    });
+    assert.equal(unhealthy.ok, false);
+    assert.match(unhealthy.output, /Loop health: UNHEALTHY/);
+  } finally {
+    removeFixture(fixture.root);
+  }
 });
 
 test('doctor all-pass output is byte-identical to its committed golden', async () => {
@@ -169,6 +337,8 @@ test('doctor all-pass output is byte-identical to its committed golden', async (
       CODEX_BIN: fixture.bins.codex,
       AGENT_BIN: fixture.bins.agent,
       GH_BIN: fixture.bins.gh,
+      GITLEAKS_BIN: fixture.bins.gitleaks,
+      TRUFFLEHOG_BIN: fixture.bins.trufflehog,
       LOGDY_BIN: fixture.bins.logdy,
     });
     assert.equal(result.ok, true);

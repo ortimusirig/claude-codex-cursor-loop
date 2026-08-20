@@ -17,6 +17,9 @@ INFO [optional] GitHub publishing: optional; the loop is fully usable without it
 PASS [optional] GitHub CLI installed: {{GH_BIN}} was found
 PASS [optional] GitHub authentication: `gh auth status` exited 0
 PASS [optional] GitHub remote: {{REPOSITORY}} has a github.com remote
+PASS [optional] Publish guard gitleaks: {{GITLEAKS_BIN}} was found; the blocking publish prerequisite is satisfied
+PASS [optional] Publish guard blocklist: 2 usable blocklist terms found; the blocking publish prerequisite is satisfied
+PASS [optional] Publish guard trufflehog: {{TRUFFLEHOG_BIN}} was found; advisory publish scanning is available
 PASS [optional] Logdy event viewer: {{LOGDY_BIN}} was found
 INFO [optional] Offline run journal: available through `node bin/generate-run-journal.js --help`; no external integration is required.
 
