@@ -20,6 +20,7 @@ const CHEAP_PROBE_TIMEOUT_MS = 30_000;
 const PROBE_TIMEOUT_MS = 180_000;
 const WRITE_FILENAME = 'ccc-doctor-write.txt';
 const WRITE_CONTENT = 'CCC_DOCTOR_WRITE_OK\n';
+const DEFAULT_ENVIRONMENT = process.env;
 
 export const CURSOR_AGENT_INSTALL_COMMANDS = Object.freeze({
   win32: "irm 'https://cursor.com/install?win32=true' | iex",
@@ -90,6 +91,19 @@ function removeCreatedDirectories(missing) {
   for (const path of missing) {
     try { rmdirSync(path); } catch { /* Retain a directory if another process used it. */ }
   }
+}
+
+function doctorEnvironment(context) {
+  if (Object.hasOwn(context, 'env')) return context.env;
+  if (Object.hasOwn(context.bins, 'environment')) return context.bins.environment;
+  return DEFAULT_ENVIRONMENT;
+}
+
+function usableBlocklistTermCount(raw) {
+  return String(raw).split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+    .length;
 }
 
 async function initializeProbeRepository(gitBin, directory) {
@@ -570,6 +584,92 @@ export const DOCTOR_CHECKS = Object.freeze([
         : {
             status: 'FAIL',
             detail: `${repository} has no github.com remote`,
+            remediationKey: 'default',
+          };
+    },
+  }),
+  Object.freeze({
+    id: 'publish-guard-gitleaks',
+    phase: 'optional',
+    kind: 'optional',
+    name: 'Publish guard gitleaks',
+    remediation: remediation(
+      'publish refuses without `gitleaks`; install it from https://github.com/gitleaks/gitleaks#installing, confirm it is on PATH, and rerun doctor.',
+      null,
+      false,
+    ),
+    probe: async ({ bins }) => {
+      const bin = bins.gitleaks ?? 'gitleaks';
+      return (await commandExists(bin))
+        ? { status: 'PASS', detail: `${bin} was found; the blocking publish prerequisite is satisfied` }
+        : {
+            status: 'FAIL',
+            detail: `${bin} was not found on PATH; publish refuses without it`,
+            remediationKey: 'default',
+          };
+    },
+  }),
+  Object.freeze({
+    id: 'publish-guard-blocklist',
+    phase: 'optional',
+    kind: 'optional',
+    name: 'Publish guard blocklist',
+    remediation: remediation(
+      'set `CCC_PUBLISH_BLOCKLIST` to a readable, non-empty newline-delimited blocklist; publish refuses until at least one usable term is present.',
+      null,
+      false,
+    ),
+    probe: async (context) => {
+      const blocklistPath = doctorEnvironment(context)?.CCC_PUBLISH_BLOCKLIST;
+      if (typeof blocklistPath !== 'string' || blocklistPath === '') {
+        return {
+          status: 'FAIL',
+          detail: '`CCC_PUBLISH_BLOCKLIST` is not set; publish refuses without a readable, non-empty blocklist',
+          remediationKey: 'default',
+        };
+      }
+
+      let raw;
+      try {
+        raw = readFileSync(blocklistPath, 'utf8');
+      } catch (error) {
+        return {
+          status: 'FAIL',
+          detail: `\`CCC_PUBLISH_BLOCKLIST\` could not be read: ${error.message}; publish refuses without it`,
+          remediationKey: 'default',
+        };
+      }
+
+      const termCount = usableBlocklistTermCount(raw);
+      return termCount > 0
+        ? {
+            status: 'PASS',
+            detail: `${termCount} usable blocklist ${termCount === 1 ? 'term' : 'terms'} found; the blocking publish prerequisite is satisfied`,
+          }
+        : {
+            status: 'FAIL',
+            detail: '`CCC_PUBLISH_BLOCKLIST` contains no usable terms; publish refuses without a non-empty blocklist',
+            remediationKey: 'default',
+          };
+    },
+  }),
+  Object.freeze({
+    id: 'publish-guard-trufflehog',
+    phase: 'optional',
+    kind: 'optional',
+    name: 'Publish guard trufflehog',
+    remediation: remediation(
+      'optionally install `trufflehog` from https://github.com/trufflesecurity/trufflehog; its scan is advisory and does not block publish.',
+      null,
+      false,
+    ),
+    probe: async ({ bins }) => {
+      const bin = bins.trufflehog ?? 'trufflehog';
+      return (await commandExists(bin))
+        ? { status: 'PASS', detail: `${bin} was found; advisory publish scanning is available` }
+        : {
+            status: 'FAIL',
+            detail: `${bin} was not found on PATH; advisory only -- publish warns and proceeds without it`,
             remediationKey: 'default',
           };
     },
