@@ -7,13 +7,13 @@ const WINDOWS_TREE_SCRIPT = fileURLToPath(new URL('./windows-process-tree.ps1', 
 // Resolve a bare command name to a full path via `where` (win) / `which` (posix).
 // A bin that already carries a path separator is returned as-is when it exists.
 // Returns null when it cannot be resolved.
-function resolveBin(bin) {
+function resolveBin(bin, env = process.env) {
   if (bin.includes('/') || bin.includes('\\')) {
     return Promise.resolve(existsSync(bin) ? bin : null);
   }
   const probe = process.platform === 'win32' ? 'where' : 'which';
   return new Promise((res) => {
-    const c = spawn(probe, [bin], { windowsHide: true });
+    const c = spawn(probe, [bin], { windowsHide: true, env });
     let out = '';
     c.stdout.on('data', (d) => { out += d; });
     c.on('error', () => res(null));
@@ -101,7 +101,7 @@ export async function spawnCapture(bin, args, opts = {}) {
   let cmdArgs = args;
   let verbatim = false;
   if (process.platform === 'win32') {
-    const resolved = await resolveBin(bin);
+    const resolved = await resolveBin(bin, opts.env);
     if (resolved && /\.(cmd|bat)$/i.test(resolved)) {
       // Node cannot exec .cmd/.bat directly (CVE-2024-27980), and `shell:true`
       // RE-SPLITS args (`a b c` -> three args). Spawn cmd.exe (an .exe) directly and
@@ -187,11 +187,11 @@ export async function spawnCapture(bin, args, opts = {}) {
   });
 }
 
-export async function commandExists(bin) {
+export async function commandExists(bin, opts = {}) {
   if (bin.includes('/') || bin.includes('\\')) return existsSync(bin);
   const probe = process.platform === 'win32' ? 'where' : 'which';
   try {
-    const r = await spawnCapture(probe, [bin]);
+    const r = await spawnCapture(probe, [bin], { env: opts.env });
     return r.code === 0;
   } catch {
     return false;
