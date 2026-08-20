@@ -187,7 +187,6 @@ function fakeGhEnvironment(root, overrides = {}) {
 }
 
 const noOpPush = async () => 'b'.repeat(40);
-<<<<<<< HEAD
 
 test('the pull request body carries no recorded event content', () => {
   const recordedCommand = {
@@ -220,7 +219,8 @@ test('the pull request body carries no recorded event content', () => {
     assert.ok(!content.body.includes(String(value)),
       `pull request body must not leak recorded ${field} marker: ${value}`);
   }
-=======
+});
+
 const cleanGuard = async () => ({ ok: true, findings: [], advisories: [], warnings: [] });
 
 test('publish refuses and makes no network call when the guard finds something', async (t) => {
@@ -292,7 +292,6 @@ test('a guard refusal never prints a secret value', async (t) => {
     assert.doesNotMatch(error.message, /AKIAEXAMPLESECRET/);
     return true;
   });
->>>>>>> chain-guard
 });
 
 test('GitHub publish preconditions have distinct actionable failures', async (t) => {
