@@ -25,6 +25,7 @@ const installerPath = join(root, 'install.mjs');
 const readmePath = join(root, 'README.md');
 const usagePath = join(root, 'docs', 'usage.md');
 const skillPath = join(root, 'skills', 'uroboros', 'SKILL.md');
+const setupSkillPath = join(root, 'skills', 'uroboros-setup', 'SKILL.md');
 
 function parseFrontmatter(path) {
   const document = readFileSync(path, 'utf8');
@@ -97,6 +98,33 @@ test('CLI commands and plugin command files cover one another exactly', () => {
     'positive control: a fabricated command file must be reported stale');
 });
 
+test('plugin packages exactly the uroboros and uroboros-setup skills', () => {
+  const skillDirectory = join(root, 'skills');
+  const skillNames = readdirSync(skillDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(skillNames, ['uroboros', 'uroboros-setup'],
+    'skills/ must contain exactly the two packaged skills');
+  assert.ok(existsSync(skillPath), 'skills/uroboros/SKILL.md must be packaged');
+  assert.ok(existsSync(setupSkillPath),
+    'skills/uroboros-setup/SKILL.md must be packaged alongside skills/uroboros/SKILL.md');
+});
+
+test('uroboros-setup front matter retrieves on the missing-binary symptom', () => {
+  const { fields } = parseFrontmatter(setupSkillPath);
+  assert.equal(fields.name, 'uroboros-setup');
+  assert.ok(fields.description, 'uroboros-setup description must be non-empty');
+  assert.match(fields.description, /node: command not found|missing-binary/i,
+    'uroboros-setup description must name the missing-binary symptom');
+});
+
+test('bootstrap prerequisite detection never invokes loop.js to discover Node', () => {
+  const { document } = parseFrontmatter(setupSkillPath);
+  assert.doesNotMatch(document, /loop[.]js/i,
+    'Node-free prerequisite detection must not invoke loop.js');
+});
+
 test('every command has valid front matter, the CLI description, and controller safety law', () => {
   const descriptions = commandDescriptions();
   assert.deepEqual(Object.keys(descriptions), [...CLI_COMMANDS],
@@ -145,6 +173,7 @@ test('plugin and marketplace manifests have the required identity and root layou
 
   assert.ok(existsSync(join(root, 'commands')));
   assert.ok(existsSync(join(root, 'skills', 'uroboros', 'SKILL.md')));
+  assert.ok(existsSync(join(root, 'skills', 'uroboros-setup', 'SKILL.md')));
   assert.equal(existsSync(join(metadataDirectory, 'commands')), false);
   assert.equal(existsSync(join(metadataDirectory, 'skills')), false);
   assert.equal(existsSync(join(root, 'SKILL.md')), false, 'the root skill must have been moved');
@@ -154,6 +183,7 @@ test('plugin and marketplace manifests have the required identity and root layou
     '.claude-plugin/marketplace.json',
     'commands/run.md',
     'skills/uroboros/SKILL.md',
+    'skills/uroboros-setup/SKILL.md',
   ];
   assert.deepEqual(placementErrors(correctShape), [],
     'positive valid-layout control must be accepted');
