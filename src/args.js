@@ -98,6 +98,7 @@ export function parseArgs(argv) {
       options: {
         deep: { type: 'boolean' },
         fix: { type: 'boolean' },
+        yes: { type: 'boolean' },
         'scratch-root': { type: 'string' },
         repository: { type: 'string' },
       },
@@ -107,10 +108,14 @@ export function parseArgs(argv) {
     if (values.deep && values.fix) {
       throw new Error('doctor --deep and --fix cannot be combined');
     }
+    if (values.yes && !values.fix) {
+      throw new Error('doctor --yes requires --fix');
+    }
     return {
       command,
       deep: values.deep === true,
       ...(values.fix === true ? { fix: true } : {}),
+      ...(values.yes === true ? { yes: true } : {}),
       ...(values['scratch-root'] === undefined ? {} : { scratchRoot: values['scratch-root'] }),
       ...(values.repository === undefined ? {} : { repository: values.repository }),
     };
@@ -118,12 +123,16 @@ export function parseArgs(argv) {
   if (command === 'setup') {
     const { values } = nodeParseArgs({
       args: argv.slice(1),
-      options: { 'scratch-root': { type: 'string' } },
+      options: {
+        'scratch-root': { type: 'string' },
+        yes: { type: 'boolean' },
+      },
       allowPositionals: false,
       strict: true,
     });
     return {
       command,
+      ...(values.yes === true ? { yes: true } : {}),
       ...(values['scratch-root'] === undefined ? {} : { scratchRoot: values['scratch-root'] }),
     };
   }

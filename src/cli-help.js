@@ -10,8 +10,8 @@ export const CLI_USAGE = `Usage:
   node bin/loop.js dashboard [<run-directory> | --run <run-directory> | --scratch-root <directory>] [--port <0-65535>]
   node bin/loop.js publish <completed-run-directory>
   node bin/loop.js doctor [--deep] [--scratch-root <directory>] [--repository <directory>]
-  node bin/loop.js doctor --fix [--scratch-root <directory>] [--repository <directory>]
-  node bin/loop.js setup [--scratch-root <directory>]
+  node bin/loop.js doctor --fix [--yes] [--scratch-root <directory>] [--repository <directory>]
+  node bin/loop.js setup [--yes] [--scratch-root <directory>]
   node bin/loop.js init <directory>
   node bin/loop.js help
 

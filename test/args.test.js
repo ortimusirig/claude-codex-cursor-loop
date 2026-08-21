@@ -78,13 +78,19 @@ test('doctor parses --fix without deep probes and rejects the token-spending com
     () => parseArgs(['doctor', '--fix', '--deep']),
     /cannot be combined/,
   );
+  assert.deepEqual(parseArgs(['doctor', '--fix', '--yes']), {
+    command: 'doctor', deep: false, fix: true, yes: true,
+  });
+  assert.throws(() => parseArgs(['doctor', '--yes']), /--yes requires --fix/);
+  assert.throws(() => parseArgs(['doctor', '--deep', '--yes']), /--yes requires --fix/);
 });
 
-test('setup accepts only its optional scratch root', () => {
+test('setup accepts its optional scratch root and headless consent flag', () => {
   assert.deepEqual(parseArgs(['setup']), { command: 'setup' });
   assert.deepEqual(parseArgs(['setup', '--scratch-root', 'scratch']), {
     command: 'setup', scratchRoot: 'scratch',
   });
+  assert.deepEqual(parseArgs(['setup', '--yes']), { command: 'setup', yes: true });
   assert.throws(() => parseArgs(['setup', 'somewhere']), /Unexpected argument/);
 });
 

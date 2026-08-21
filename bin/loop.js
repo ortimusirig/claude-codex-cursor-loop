@@ -13,6 +13,10 @@ import { formatEventSummary } from '../src/events.js';
 import { formatStatus, readStatus } from '../src/status.js';
 import { CLI_USAGE } from '../src/cli-help.js';
 import {
+  createHeadlessInteraction,
+  formatHeadlessSetupSummary,
+} from '../src/cli-interaction.js';
+import {
   formatDashboardAnnouncement,
   launchDashboard,
 } from '../src/dashboard-launcher.js';
@@ -70,8 +74,15 @@ async function main() {
   }
   if (opts.command === 'doctor') {
     const { runDoctor } = await import('../src/doctor.js');
+    const headless = !process.stdin.isTTY;
     let prompt;
-    if (opts.fix) {
+    let interaction;
+    if (opts.fix && headless) {
+      interaction = createHeadlessInteraction({
+        yes: opts.yes,
+        write: (text) => process.stdout.write(text),
+      });
+    } else if (opts.fix) {
       const { createInterface } = await import('node:readline/promises');
       prompt = createInterface({ input: process.stdin, output: process.stdout });
     }
@@ -82,8 +93,8 @@ async function main() {
         fix: opts.fix,
         scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
         repository: opts.repository,
-        ...(prompt ? {
-          consent: (question) => prompt.question(question),
+        ...(opts.fix ? {
+          consent: interaction?.consent ?? ((question) => prompt.question(question)),
           write: (text) => process.stdout.write(text),
         } : {}),
       });
@@ -95,22 +106,37 @@ async function main() {
     return;
   }
   if (opts.command === 'setup') {
-    const { createInterface } = await import('node:readline/promises');
     const { runSetup } = await import('../src/setup.js');
-    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    const headless = !process.stdin.isTTY;
+    let prompt;
+    let interaction;
+    if (headless) {
+      interaction = createHeadlessInteraction({
+        yes: opts.yes,
+        write: (text) => process.stdout.write(text),
+      });
+    } else {
+      const { createInterface } = await import('node:readline/promises');
+      prompt = createInterface({ input: process.stdin, output: process.stdout });
+    }
     let result;
     try {
       result = await runSetup({
         scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
         operatorDirectory: process.cwd(),
-        consent: (question) => prompt.question(question),
-        wait: (question) => prompt.question(question),
+        consent: interaction?.consent ?? ((question) => prompt.question(question)),
+        wait: interaction?.wait ?? ((question) => prompt.question(question)),
         write: (text) => process.stdout.write(text),
       });
     } finally {
-      prompt.close();
+      prompt?.close();
     }
-    if (!result.ok && !['restart-required', 'stopped'].includes(result.status)) {
+    if (headless && !result.ok) {
+      process.stdout.write(formatHeadlessSetupSummary(result.outcomes, {
+        scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
+      }));
+    }
+    if (!result.ok && (headless || !['restart-required', 'stopped'].includes(result.status))) {
       process.exitCode = 1;
     }
     return;

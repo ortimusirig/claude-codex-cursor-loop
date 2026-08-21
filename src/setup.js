@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { WAIT_NOT_ACKNOWLEDGED } from './interaction-signals.js';
 import {
   cleanupDoctorProbeState,
   createDoctorProbeState,
@@ -170,11 +171,12 @@ export async function runSetup({
       printInstruction(write, remediation);
       if (!instructionWaited.has(check.id)) {
         instructionWaited.add(check.id);
-        if (remediation?.prose) installAttemptedOrInstructed.add(check.id);
         const answer = await wait(
           `Press Enter after following the instruction for ${check.name}, or type q to stop: `,
           { check, outcome },
         );
+        if (answer === WAIT_NOT_ACKNOWLEDGED) continue;
+        if (remediation?.prose) installAttemptedOrInstructed.add(check.id);
         if (answer === false || /^(?:q|quit|stop)$/i.test(String(answer).trim())) {
           operatorStopped = true;
         } else {

@@ -399,9 +399,14 @@ test('the publish CLI prints and records the PR URL without contacting the netwo
   const fixture = await createRunFixture();
   const bare = join(fixture.root, 'cli-remote.git');
   await git(['init', '--bare', bare]);
+  // Git for Windows 2.52 parses a file:///C:/... rewrite target as the POSIX-looking
+  // path /C:/..., so use Git's native drive-letter form for this local no-network remote.
+  const localRemote = process.platform === 'win32'
+    ? bare.replaceAll('\\', '/')
+    : pathToFileURL(bare).toString();
   const fake = fakeGhEnvironment(fixture.root, {
     GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: `url.${pathToFileURL(bare)}.insteadOf`,
+    GIT_CONFIG_KEY_0: `url.${localRemote}.insteadOf`,
     GIT_CONFIG_VALUE_0: 'https://github.com/acme/widgets.git',
   });
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
