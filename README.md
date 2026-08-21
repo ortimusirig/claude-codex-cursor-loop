@@ -4,6 +4,21 @@
 
 Codex writes in a git-isolated copy, command exit codes gate the change, and Cursor reviews it read-only.
 
+### If you are an AI agent setting this up for someone
+
+Follow [`skills/uroboros-setup/SKILL.md`](skills/uroboros-setup/SKILL.md), the single source of
+truth for the bootstrap procedure. If this README is all you have, fetch the skill directly:
+<https://raw.githubusercontent.com/ortimusirig/uroboros/main/skills/uroboros-setup/SKILL.md>.
+
+Expected order:
+
+1. Verify Node 24 or newer, git, the Codex CLI, and the Cursor CLI.
+2. With the operator's consent, install anything missing.
+3. Have the operator complete the two browser sign-ins.
+4. Install the plugin.
+5. Restart the Claude Code session so its slash commands register.
+6. Run the demo pass.
+
 ## Install
 
 Run these two commands inside Claude Code (not a terminal):
@@ -17,24 +32,26 @@ No clone or local installer is needed to use the plugin.
 
 ## First run
 
-Then run this, also inside Claude Code:
+Plugin slash commands do not register in a Claude Code session that was already running when
+the plugin was installed. After `/plugin install`, restart the Claude Code session, then run:
 
 ```text
 /uroboros:setup
 ```
 
-`setup` is the guided path. It checks everything the loop needs, offers to install what it
-safely can — showing you the exact command and asking first — walks you through the two
-sign-ins, then scaffolds a throwaway demo project and executes one real pass against it. You
-finish having watched an isolated worktree, a green gate, a verifier verdict and a real diff,
-rather than having ticked off a checklist. The demo is written under the scratch root, never
-into a project of yours.
+`setup` is the guided path. It checks everything the loop needs and, once the prerequisites are
+green, scaffolds a throwaway demo project and executes one real pass against it. You finish
+having watched an isolated worktree, a green gate, a verifier verdict and a real diff, rather
+than having ticked off a checklist. The demo is written under the scratch root, never into a
+project of yours.
 
 Re-running `setup` is safe: it re-checks and skips whatever is already green.
 
-**Two things nothing can do for you: signing in to Codex, and signing in to Cursor.** Both
-are interactive browser flows owned by those CLIs. `setup` tells you exactly when to do them
-and re-checks until they pass.
+**Two things nothing can do for you: signing in to Codex, and signing in to Cursor.** Both are
+interactive browser flows owned by those CLIs. In a terminal with a TTY, `setup` waits while the
+operator completes them and then re-checks. Inside Claude Code there is no TTY, so `setup`
+reports its `NEEDS:` summary and exits non-zero; complete the sign-ins in a terminal, then run
+`/uroboros:setup` again.
 
 If you would rather look before anything touches your machine, `/uroboros:doctor` runs the
 same checks, changes nothing, and spends no agent tokens. Add `--fix` to have it offer the
@@ -48,26 +65,8 @@ in under its own account.** `setup` and `doctor` check all of these and name wha
 so you should not need this section — it is here for doing it yourself, or for when something
 went wrong.
 
-One detail that catches people out: the Cursor binary is `agent`, not `cursor-agent`.
-
-Install the Cursor Agent CLI on Windows from PowerShell:
-
-```powershell
-irm 'https://cursor.com/install?win32=true' | iex
-```
-
-On macOS, Linux, or WSL:
-
-```sh
-curl https://cursor.com/install -fsS | bash
-```
-
-Reopen the terminal after installing, confirm the binary is `agent`, and run `agent login`.
-
-A freshly installed CLI is not visible to an already-running process, so a check can still
-report it missing immediately after a successful install. That is why `setup` reports
-**restart required** for that case instead of treating it as a failure — restart the terminal
-and run `setup` again.
+One detail that catches people out: the Cursor binary is `agent`, not `cursor-agent`. Follow the
+[bootstrap skill](skills/uroboros-setup/SKILL.md) for installation and remediation details.
 
 **Everything else is optional.** GitHub publishing, Logdy, and the offline Obsidian journal
 are separate add-ons. A machine with none of them has a fully working loop.

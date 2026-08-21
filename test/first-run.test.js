@@ -21,7 +21,7 @@ import { CLI_COMMANDS } from '../src/cli-help.js';
 import { PLAN_TEMPLATE } from '../src/init.js';
 
 const cli = fileURLToPath(new URL('../bin/loop.js', import.meta.url));
-const readme = fileURLToPath(new URL('../README.md', import.meta.url));
+const setupSkill = fileURLToPath(new URL('../skills/uroboros-setup/SKILL.md', import.meta.url));
 const fakeGit = fileURLToPath(new URL('../fixtures/fake-doctor-git.mjs', import.meta.url));
 const fakeCodex = fileURLToPath(new URL('../fixtures/fake-doctor-codex.mjs', import.meta.url));
 const fakeAgent = fileURLToPath(new URL('../fixtures/fake-doctor-agent.mjs', import.meta.url));
@@ -167,9 +167,10 @@ test('doctor gives the official platform-specific Cursor install command and ski
     assert.doesNotMatch(result.stdout, /FAIL \[required\] Cursor signed in:/,
       'a missing CLI has one install failure, not a duplicate sign-in failure');
 
-    const documentation = readFileSync(readme, 'utf8');
+    const documentation = readFileSync(setupSkill, 'utf8').replaceAll('\\|', '|');
     for (const command of Object.values(CURSOR_AGENT_INSTALL_COMMANDS)) {
-      assert.ok(documentation.includes(command), `README must contain the shared command: ${command}`);
+      assert.ok(documentation.includes(command),
+        `setup skill must contain the shared command: ${command}`);
     }
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
