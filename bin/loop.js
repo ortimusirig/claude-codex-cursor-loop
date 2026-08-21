@@ -134,6 +134,8 @@ async function main() {
     if (headless && !result.ok) {
       process.stdout.write(formatHeadlessSetupSummary(result.outcomes, {
         scratchRoot: opts.scratchRoot ?? SCRATCH_ROOT,
+        status: result.status,
+        restartRequired: result.restartRequired,
       }));
     }
     if (!result.ok && (headless || !['restart-required', 'stopped'].includes(result.status))) {

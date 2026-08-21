@@ -11,14 +11,39 @@ export function createHeadlessInteraction({ yes = false, write = () => {} } = {}
   };
 }
 
-export function formatHeadlessSetupSummary(outcomes, { scratchRoot } = {}) {
+export function formatHeadlessSetupSummary(
+  outcomes,
+  { scratchRoot, status, restartRequired = [] } = {},
+) {
+  if (typeof status !== 'string' || status === '') {
+    throw new TypeError('headless setup summary requires a status');
+  }
+
   const failing = outcomes.filter(({ check, outcome }) => (
     check.kind === 'required' && outcome.status === 'FAIL'
   ));
+
+  if (status === 'restart-required') {
+    const restartIds = new Set(restartRequired);
+    const awaitingRestart = restartIds.size > 0
+      ? failing.filter(({ check }) => restartIds.has(check.id))
+      : failing.filter(({ outcome }) => outcome.reason === 'not-on-path');
+    const lines = [
+      `SETUP STATUS: ${status}`,
+      'Restart the terminal, then run setup again.',
+      'Checks requiring restart:',
+    ];
+    for (const { check } of awaitingRestart) {
+      lines.push(`RESTART REQUIRED: ${check.id}\t${check.name}`);
+    }
+    return `${lines.join('\n')}\n`;
+  }
+
+  if (status !== 'prerequisite-incomplete') return `SETUP STATUS: ${status}\n`;
   if (failing.length === 0) return '';
 
   const lines = [
-    'SETUP STATUS: prerequisite-incomplete',
+    `SETUP STATUS: ${status}`,
     'Remaining required work:',
   ];
   for (const { check, outcome } of failing) {
